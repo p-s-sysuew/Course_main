@@ -240,7 +240,9 @@ std::string DBMS::executeRevert(const RevertCommand& command)
         if (entry.start_time() > command.timestamp) break;
 
         std::string sql = entry.query_text();
-        if (toUpper(trim(sql)).find("REVERT") == 0) continue;
+        std::string upperSql = toUpper(trim(sql));
+        if (upperSql.find("REVERT") == 0) continue;
+        if (upperSql.find("SELECT") == 0) continue;
 
         commandsToReplay.push_back(sql);
     }
@@ -260,13 +262,10 @@ std::string DBMS::executeRevert(const RevertCommand& command)
     for (const auto& sql : commandsToReplay)
     {
         try {
-            std::vector<std::string> statements = splitStatements(sql);
-            for (const auto& stmtText : statements) {
-                Statement stmt = parser.parseStatement(stmtText);
-                execute(stmt);
-            }
-        } catch (...) {
-            // Replay as much as possible
+            Statement stmt = parser.parseStatement(sql);
+            execute(stmt);
+        } catch (const std::exception& e) {
+             std::cerr << "REVERT replay warning: " << e.what() << " in SQL: " << sql << std::endl;
         }
     }
 
