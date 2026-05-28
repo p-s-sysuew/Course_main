@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+message ProtoValue {
+  enum Kind {
+    NULL_VALUE = 0;
+    INT_VALUE = 1;
+    STRING_VALUE = 2;
+  }
+
+  Kind kind = 1;
+  int32 int_value = 2;
+  string string_value = 3;
+}
+
+message ProtoRow {
+  repeated ProtoValue values = 1;
+}
+
+message ProtoColumn {
+  enum Type {
+    INT = 0;
+    STRING = 1;
+  }
+
+  string name = 1;
+  Type type = 2;
+  bool not_null = 3;
+  bool indexed = 4;
+  bool has_default = 5;
+  ProtoValue default_value = 6;
+}
+
+message ProtoSchema {
+  repeated ProtoColumn columns = 1;
+}
+
+message ProtoIndexEntry {
+  ProtoValue key = 1;
+  int64 offset = 2;
+  bool deleted = 3;
+}
+
+message ProtoIndexFile {
+  repeated ProtoIndexEntry entries = 1;
+}
+
+message ProtoBStarPage {
+  int64 page_id = 1;
+  bool is_leaf = 2;
+  repeated ProtoIndexEntry entries = 3;
+  repeated int64 child_page_ids = 4;
+  bool deleted = 5;
+}
+
+message ProtoBStarPageLocation {
+  int64 page_id = 1;
+  int64 offset = 2;
+  int64 size = 3;
+}
+
+message ProtoBStarFreeSlot {
+  int64 offset = 1;
+  int64 size = 2;
+}
+
+message ProtoBStarDiskHeader {
+  bool root_exists = 1;
+  int64 root_page_id = 2;
+  int64 next_page_id = 3;
+  int64 size = 4;
+  repeated ProtoBStarPageLocation locations = 5;
+  repeated ProtoBStarFreeSlot free_slots = 6;
+}
+
+message ProtoBStarTree {
+  bool root_exists = 1;
+  int64 size = 2;
+  int64 root_page_id = 3;
+  int64 next_page_id = 4;
+  repeated ProtoBStarPage pages = 5;
+}
+
+message ProtoDeletedOffset {
+  int64 offset = 1;
+  int64 size = 2;
+}
+
+message ProtoDeletedOffsets {
+  repeated ProtoDeletedOffset items = 1;
+}
+
+message ProtoStringPool {
+  repeated string values = 1;
+}
+
+message ProtoAuthUser {
+  string name = 1;
+  string salt = 2;
+  string password_hash = 3;
+  string role = 4;
+}
+
+message ProtoAuthFile {
+  repeated ProtoAuthUser users = 1;
+}
+
+message ProtoLogEntry {
+  string client_id = 1;
+  string handler_id = 2;
+  string start_time = 3;
+  string finish_time = 4;
+  string status = 5;
+  string query_text = 6;
+  string message = 7;
+}

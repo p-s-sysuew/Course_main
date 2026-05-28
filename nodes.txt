@@ -1,0 +1,3 @@
+# host port restart-command
+127.0.0.1 8081
+127.0.0.1 8082 ./build/course_server 8082
