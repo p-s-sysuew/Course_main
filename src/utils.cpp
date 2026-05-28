@@ -170,8 +170,11 @@ std::string nowText()
     std::tm tmValue;
     localtime_r(&rawTime, &tmValue);
 
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
     std::ostringstream out;
-    out << std::put_time(&tmValue, "%Y-%m-%d %H:%M:%S");
+    out << std::put_time(&tmValue, "%Y.%m.%d-%H:%M:%S");
+    out << '.' << std::setfill('0') << std::setw(3) << ms.count();
     return out.str();
 }
 

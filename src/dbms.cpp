@@ -1,9 +1,12 @@
 #include "dbms.h"
 #include "utils.h"
 #include "tablelocks.h"
+#include "securefile.h"
+#include "course_storage.pb.h"
 
 #include <stdexcept>
 #include <mutex>
+#include <iostream>
 
 // Существует ли база
 Database::Database(const std::filesystem::path& path)
@@ -38,6 +41,11 @@ DBMS::DBMS(const std::filesystem::path& rootPath)
     : rootPath_(rootPath)
 {
     ensureDirectoryExists(rootPath_);
+}
+
+void DBMS::setLogPath(const std::filesystem::path& logPath)
+{
+    logPath_ = logPath;
 }
 
 // Создание пути до бд
@@ -86,7 +94,9 @@ std::string DBMS::execute(const Statement& statement)
     if (std::holds_alternative<InsertCommand>(statement)) return executeInsert(std::get<InsertCommand>(statement));
     if (std::holds_alternative<UpdateCommand>(statement)) return executeUpdate(std::get<UpdateCommand>(statement));
     if (std::holds_alternative<DeleteCommand>(statement)) return executeDelete(std::get<DeleteCommand>(statement));
-    return executeSelect(std::get<SelectCommand>(statement));
+    if (std::holds_alternative<SelectCommand>(statement)) return executeSelect(std::get<SelectCommand>(statement));
+    if (std::holds_alternative<RevertCommand>(statement)) return executeRevert(std::get<RevertCommand>(statement));
+    throw std::runtime_error("неизвестный тип команды");
 }
 
 // Создание бд
@@ -205,4 +215,60 @@ std::string DBMS::executeSelect(const SelectCommand& command)
     Table table = database.openTable(command.table);
     SelectResult result = table.selectRows(command.selectAll, command.items, command.where);
     return result.json;
+}
+
+std::string DBMS::executeRevert(const RevertCommand& command)
+{
+    if (logPath_.empty())
+    {
+        throw std::runtime_error("REVERT: путь к логам не задан");
+    }
+
+    if (!std::filesystem::exists(logPath_))
+    {
+        throw std::runtime_error("REVERT: файл логов не найден");
+    }
+
+    std::vector<std::string> records = readSecureRecords(logPath_);
+    std::vector<std::string> commandsToReplay;
+
+    for (const auto& record : records)
+    {
+        ProtoLogEntry entry;
+        if (!entry.ParseFromString(record)) continue;
+        if (entry.status() != "OK") continue;
+        if (entry.start_time() > command.timestamp) break;
+
+        std::string sql = entry.query_text();
+        if (toUpper(trim(sql)).find("REVERT") == 0) continue;
+
+        commandsToReplay.push_back(sql);
+    }
+
+    // Full system revert: wipe everything but auth/system data
+    for (const auto& entry : std::filesystem::directory_iterator(rootPath_))
+    {
+        if (entry.path().filename() != "_system" && entry.path().filename() != "users.pb")
+        {
+            std::filesystem::remove_all(entry.path());
+        }
+    }
+
+    Parser parser;
+    currentDatabase_.clear();
+
+    for (const auto& sql : commandsToReplay)
+    {
+        try {
+            std::vector<std::string> statements = splitStatements(sql);
+            for (const auto& stmtText : statements) {
+                Statement stmt = parser.parseStatement(stmtText);
+                execute(stmt);
+            }
+        } catch (...) {
+            // Replay as much as possible
+        }
+    }
+
+    return "OK: состояние базы данных откачено к " + command.timestamp;
 }

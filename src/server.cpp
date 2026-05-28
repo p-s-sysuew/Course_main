@@ -99,75 +99,54 @@ static bool parseRegisterJson(const std::string& body, std::string& user, std::s
 
     user = json["user"].s();
     password = json["password"].s();
-
     if (json.has("role"))
     {
         role = json["role"].s();
     }
-    else
-    {
-        role.clear();
-    }
-
     return true;
 }
 
-// Основная серверная
+// Настройка API
 static void configureRoutes(crow::SimpleApp& app, DBMS& dbms, Parser& parser, Logger& logger, AuthManager& auth, HeartbeatMonitor& heartbeat)
 {
     CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::GET)
-    ([]()
-    {
-        return makeJsonResponse(200, true, "ok", "");
-    });
+    ([]() { return "OK"; });
 
     CROW_ROUTE(app, "/register").methods(crow::HTTPMethod::POST)
     ([&auth](const crow::request& request)
     {
-        std::string user;
-        std::string password;
-        std::string requestedRole;
-
-        if (!parseRegisterJson(request.body, user, password, requestedRole))
+        std::string user, password, role;
+        if (!parseRegisterJson(request.body, user, password, role))
         {
-            return makeJsonResponse(400, false, "", "ожидался JSON {\"user\":\"...\",\"password\":\"...\",\"role\":\"reader|writer|admin\"}");
+            return makeJsonResponse(400, false, "", "некорректный json-запрос регистрации");
         }
 
-        std::string creatorUser;
-        std::string creatorRole;
-        std::string token = extractBearerToken(request);
-        if (!token.empty())
+        std::string currentRole = "reader";
+        std::string userName, tempRole;
+        if (auth.verifyToken(extractBearerToken(request), userName, tempRole))
         {
-            auth.verifyToken(token, creatorUser, creatorRole);
+            currentRole = tempRole;
         }
 
         std::string error;
-        if (!auth.registerUser(user, password, requestedRole, creatorRole, error))
+        if (!auth.registerUser(user, password, role, currentRole, error))
         {
-            return makeJsonResponse(409, false, "", error);
+            return makeJsonResponse(400, false, "", error);
         }
 
-        std::string newToken;
-        if (!auth.login(user, password, newToken, error))
-        {
-            return makeJsonResponse(500, false, "", "пользователь создан, но токен не удалось выдать: " + error);
-        }
-
-        return makeJsonResponse(201, true, newToken, "");
+        return makeJsonResponse(200, true, "пользователь успешно зарегистрирован", "");
     });
 
     CROW_ROUTE(app, "/login").methods(crow::HTTPMethod::POST)
     ([&auth](const crow::request& request)
     {
-        std::string user;
-        std::string password;
+        std::string user, password;
         if (!parseLoginJson(request.body, user, password))
         {
-            return makeJsonResponse(400, false, "", "ожидался JSON {\"user\":\"...\",\"password\":\"...\"}");
+            return makeJsonResponse(400, false, "", "некорректный json-запрос логина");
         }
 
-        std::string token;
-        std::string error;
+        std::string token, error;
         if (!auth.login(user, password, token, error))
         {
             return makeJsonResponse(401, false, "", error);
@@ -179,43 +158,17 @@ static void configureRoutes(crow::SimpleApp& app, DBMS& dbms, Parser& parser, Lo
     CROW_ROUTE(app, "/query").methods(crow::HTTPMethod::POST)
     ([&dbms, &parser, &logger, &auth](const crow::request& request)
     {
-        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-        bool errorHappened = false;
-
         std::string token = extractBearerToken(request);
-        std::string user;
-        std::string role;
+        std::string userName, role;
 
-        if (!auth.verifyToken(token, user, role))
+        if (!auth.verifyToken(token, userName, role))
         {
-            globalTelemetry().record(0, true);
-            return makeJsonResponse(401, false, "", "требуется корректный JWT-токен");
+            return makeJsonResponse(401, false, "", "ошибка авторизации: невалидный или просроченный токен");
         }
 
-        if (request.body.empty())
-        {
-            globalTelemetry().record(0, true);
-            return makeJsonResponse(400, false, "", "пустое тело запроса");
-        }
+        std::string result = executeTextAuthorized(dbms, parser, logger, auth, request.body, userName, "api", role);
 
-        std::string result;
-        try
-        {
-            result = executeTextAuthorized(dbms, parser, logger, auth, request.body, user, "crow", role);
-        }
-        catch (const std::exception& ex)
-        {
-            errorHappened = true;
-            result = ex.what();
-        }
-
-        bool sqlErrorTextFound = containsSqlErrorText(result);
-
-        std::chrono::steady_clock::time_point finish = std::chrono::steady_clock::now();
-        long long durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start).count();
-        globalTelemetry().record(durationMs, errorHappened || sqlErrorTextFound);
-
-        if (errorHappened || sqlErrorTextFound)
+        if (containsSqlErrorText(result))
         {
             return makeJsonResponse(500, false, "", result);
         }
@@ -249,6 +202,7 @@ int main(int argc, char* argv[])
     int port = getPortFromArguments(argc, argv);
 
     DBMS dbms("data");
+    dbms.setLogPath("logs/access.pb");
     Parser parser;
     Logger logger("logs");
     AuthManager auth(std::filesystem::path("data") / "_system" / "users.pb");

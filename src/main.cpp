@@ -57,6 +57,7 @@ int main(int argc, char* argv[])
     try
     {
         DBMS dbms("data");
+        dbms.setLogPath("logs/access.pb");
         Parser parser;
         Logger logger("logs");
 

@@ -64,6 +64,23 @@ Statement Parser::parseStatement(const std::string& text) const
     {
         statement = parseSelect(lexer);
     }
+    else if (command == "REVERT")
+    {
+        RevertCommand revert;
+        Token next = lexer.peek();
+        if (next.type == TokenType::Word && next.text != "YYYY" && next.text.find('.') == std::string::npos)
+        {
+             revert.table = parseTableName(lexer);
+        }
+
+        Token timestamp = lexer.next();
+        if (timestamp.type != TokenType::Word && timestamp.type != TokenType::Number)
+        {
+             throw std::runtime_error("ожидалась метка времени в REVERT");
+        }
+        revert.timestamp = timestamp.text;
+        statement = revert;
+    }
     else
     {
         throw std::runtime_error("неизвестная команда: " + command);
@@ -116,44 +133,48 @@ Value Parser::parseLiteral(Lexer& lexer) const
 {
     Token token = lexer.next();
 
-    if (token.type == TokenType::Number)
-    {
-        return makeInt(std::stoi(token.text));
-    }
-
     if (token.type == TokenType::String)
     {
-        return makeString(token.text);
+        Value value;
+        value.type = ValueType::String;
+        value.stringValue = std::make_shared<std::string>(token.text);
+        return value;
     }
 
-    if (token.type == TokenType::Word && toUpper(token.text) == "NULL")
+    if (token.type == TokenType::Number)
     {
-        return makeNull();
+        Value value;
+        value.type = ValueType::Int;
+        value.intValue = std::atoi(token.text.c_str());
+        return value;
     }
 
-    throw std::runtime_error("ожидалась константа, но получено '" + token.text + "'");
+    if (toUpper(token.text) == "NULL")
+    {
+        Value value;
+        value.type = ValueType::Null;
+        return value;
+    }
+
+    throw std::runtime_error("некорректный литерал: " + token.text);
 }
 
 Operand Parser::parseOperand(Lexer& lexer) const
 {
     Token token = lexer.peek();
-    Operand result;
 
-    if (token.type == TokenType::Number || token.type == TokenType::String || (token.type == TokenType::Word && toUpper(token.text) == "NULL"))
+    if (token.type == TokenType::String || token.type == TokenType::Number || toUpper(token.text) == "NULL")
     {
+        Operand result;
         result.isColumn = false;
         result.literalValue = parseLiteral(lexer);
         return result;
     }
 
-    if (token.type == TokenType::Word)
-    {
-        result.isColumn = true;
-        result.columnName = parseIdentifier(lexer);
-        return result;
-    }
-
-    throw std::runtime_error("ожидался операнд в WHERE, но получено '" + token.text + "'");
+    Operand result;
+    result.isColumn = true;
+    result.columnName = parseIdentifier(lexer);
+    return result;
 }
 
 CompareOp Parser::parseCompareOp(Lexer& lexer) const
@@ -167,7 +188,7 @@ CompareOp Parser::parseCompareOp(Lexer& lexer) const
     if (token.text == ">") return CompareOp::Greater;
     if (token.text == ">=") return CompareOp::GreaterOrEq;
 
-    throw std::runtime_error("ожидался оператор сравнения, но получено '" + token.text + "'");
+    throw std::runtime_error("неизвестный оператор сравнения: " + token.text);
 }
 
 Expr Parser::parseWhereExpression(Lexer& lexer) const
@@ -179,16 +200,14 @@ Expr Parser::parseOrExpression(Lexer& lexer) const
 {
     Expr left = parseAndExpression(lexer);
 
-    while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "OR")
+    while (toUpper(lexer.peek().text) == "OR")
     {
         lexer.next();
-        Expr right = parseAndExpression(lexer);
-
-        Expr combined;
-        combined.kind = Expr::Kind::Or;
-        combined.first = std::make_shared<Expr>(left);
-        combined.second = std::make_shared<Expr>(right);
-        left = combined;
+        Expr result;
+        result.kind = Expr::Kind::Or;
+        result.first = std::make_shared<Expr>(left);
+        result.second = std::make_shared<Expr>(parseAndExpression(lexer));
+        left = result;
     }
 
     return left;
@@ -198,16 +217,14 @@ Expr Parser::parseAndExpression(Lexer& lexer) const
 {
     Expr left = parsePrimaryExpression(lexer);
 
-    while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "AND")
+    while (toUpper(lexer.peek().text) == "AND")
     {
         lexer.next();
-        Expr right = parsePrimaryExpression(lexer);
-
-        Expr combined;
-        combined.kind = Expr::Kind::And;
-        combined.first = std::make_shared<Expr>(left);
-        combined.second = std::make_shared<Expr>(right);
-        left = combined;
+        Expr result;
+        result.kind = Expr::Kind::And;
+        result.first = std::make_shared<Expr>(left);
+        result.second = std::make_shared<Expr>(parsePrimaryExpression(lexer));
+        left = result;
     }
 
     return left;
@@ -217,9 +234,9 @@ Expr Parser::parsePrimaryExpression(Lexer& lexer) const
 {
     if (lexer.consumeIf("("))
     {
-        Expr inside = parseWhereExpression(lexer);
+        Expr expr = parseOrExpression(lexer);
         lexer.expect(")");
-        return inside;
+        return expr;
     }
 
     return parsePredicate(lexer);
@@ -228,8 +245,10 @@ Expr Parser::parsePrimaryExpression(Lexer& lexer) const
 Expr Parser::parsePredicate(Lexer& lexer) const
 {
     Operand left = parseOperand(lexer);
+    Token next = lexer.peek();
+    std::string word = toUpper(next.text);
 
-    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "BETWEEN")
+    if (word == "BETWEEN")
     {
         lexer.next();
         Expr expr;
@@ -241,7 +260,7 @@ Expr Parser::parsePredicate(Lexer& lexer) const
         return expr;
     }
 
-    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "LIKE")
+    if (word == "LIKE")
     {
         lexer.next();
         Expr expr;
@@ -269,32 +288,37 @@ CreateTableCommand Parser::parseCreateTable(Lexer& lexer) const
     {
         ColumnInfo column;
         column.name = parseIdentifier(lexer);
-        column.type = parseColumnType(parseIdentifier(lexer));
 
-        while (lexer.peek().type == TokenType::Word)
+        std::string typeName = toUpper(lexer.next().text);
+        if (typeName == "INT") column.type = ColumnType::Int;
+        else if (typeName == "STRING") column.type = ColumnType::String;
+        else throw std::runtime_error("неизвестный тип данных: " + typeName);
+
+        while (true)
         {
-            std::string word = toUpper(lexer.peek().text);
+            Token next = lexer.peek();
+            if (next.text == "," || next.text == ")")
+            {
+                break;
+            }
 
-            if (word == "NOT_NULL")
+            std::string modifier = toUpper(lexer.next().text);
+            if (modifier == "NOT_NULL")
             {
-                lexer.next();
                 column.notNull = true;
             }
-            else if (word == "INDEXED")
+            else if (modifier == "INDEXED")
             {
-                lexer.next();
                 column.indexed = true;
-                column.notNull = true;
             }
-            else if (word == "DEFAULT")
+            else if (modifier == "DEFAULT")
             {
-                lexer.next();
                 column.hasDefault = true;
                 column.defaultValue = parseLiteral(lexer);
             }
             else
             {
-                break;
+                throw std::runtime_error("неизвестный модификатор столбца: " + modifier);
             }
         }
 
@@ -306,6 +330,31 @@ CreateTableCommand Parser::parseCreateTable(Lexer& lexer) const
         }
 
         lexer.expect(",");
+    }
+
+    return command;
+}
+
+InsertCommand Parser::parseInsert(Lexer& lexer) const
+{
+    InsertCommand command;
+    lexer.expectWord("INTO");
+    command.table = parseTableName(lexer);
+
+    lexer.expect("(");
+    command.columns = parseIdentifierList(lexer);
+    lexer.expect(")");
+
+    lexer.expectWord("VALUE");
+    lexer.expect("(");
+    command.rows.push_back(parseLiteralRow(lexer));
+    lexer.expect(")");
+
+    while (lexer.consumeIf(","))
+    {
+        lexer.expect("(");
+        command.rows.push_back(parseLiteralRow(lexer));
+        lexer.expect(")");
     }
 
     return command;
@@ -326,47 +375,15 @@ std::vector<std::string> Parser::parseIdentifierList(Lexer& lexer) const
 
 std::vector<Value> Parser::parseLiteralRow(Lexer& lexer) const
 {
-    std::vector<Value> row;
-    lexer.expect("(");
-    row.push_back(parseLiteral(lexer));
+    std::vector<Value> result;
+    result.push_back(parseLiteral(lexer));
 
     while (lexer.consumeIf(","))
     {
-        row.push_back(parseLiteral(lexer));
+        result.push_back(parseLiteral(lexer));
     }
 
-    lexer.expect(")");
-    return row;
-}
-
-
-InsertCommand Parser::parseInsert(Lexer& lexer) const
-{
-    InsertCommand command;
-    lexer.expectWord("INTO");
-    command.table = parseTableName(lexer);
-    lexer.expect("(");
-    command.columns = parseIdentifierList(lexer);
-    lexer.expect(")");
-
-    if (lexer.peek().type != TokenType::Word)
-    {
-        throw std::runtime_error("в INSERT ожидалось VALUE или VALUES");
-    }
-
-    std::string word = toUpper(lexer.next().text);
-    if (word != "VALUE" && word != "VALUES")
-    {
-        throw std::runtime_error("в INSERT ожидалось VALUE или VALUES");
-    }
-
-    command.rows.push_back(parseLiteralRow(lexer));
-    while (lexer.consumeIf(","))
-    {
-        command.rows.push_back(parseLiteralRow(lexer));
-    }
-
-    return command;
+    return result;
 }
 
 UpdateCommand Parser::parseUpdate(Lexer& lexer) const
@@ -383,14 +400,19 @@ UpdateCommand Parser::parseUpdate(Lexer& lexer) const
         assignment.value = parseLiteral(lexer);
         command.assignments.push_back(assignment);
 
-        if (!lexer.consumeIf(","))
+        if (toUpper(lexer.peek().text) == "WHERE" || lexer.isEnd())
         {
             break;
         }
+
+        lexer.expect(",");
     }
 
-    lexer.expectWord("WHERE");
-    command.where = parseWhereExpression(lexer);
+    if (lexer.consumeIf("WHERE"))
+    {
+        command.where = parseWhereExpression(lexer);
+    }
+
     return command;
 }
 
@@ -399,42 +421,42 @@ DeleteCommand Parser::parseDelete(Lexer& lexer) const
     DeleteCommand command;
     lexer.expectWord("FROM");
     command.table = parseTableName(lexer);
-    lexer.expectWord("WHERE");
-    command.where = parseWhereExpression(lexer);
+
+    if (lexer.consumeIf("WHERE"))
+    {
+        command.where = parseWhereExpression(lexer);
+    }
+
     return command;
 }
 
 SelectItem Parser::parseSelectItem(Lexer& lexer) const
 {
     SelectItem item;
+    Token token = lexer.next();
+    std::string word = toUpper(token.text);
 
-    if (lexer.peek().type == TokenType::Word)
+    if (word == "COUNT" || word == "SUM" || word == "AVG")
     {
-        std::string word = toUpper(lexer.peek().text);
+        if (word == "COUNT") item.kind = SelectItem::Kind::Count;
+        if (word == "SUM") item.kind = SelectItem::Kind::Sum;
+        if (word == "AVG") item.kind = SelectItem::Kind::Avg;
 
-        if (word == "COUNT" || word == "SUM" || word == "AVG")
+        lexer.expect("(");
+        if (item.kind == SelectItem::Kind::Count && lexer.consumeIf("*"))
         {
-            lexer.next();
-            if (word == "COUNT") item.kind = SelectItem::Kind::Count;
-            if (word == "SUM") item.kind = SelectItem::Kind::Sum;
-            if (word == "AVG") item.kind = SelectItem::Kind::Avg;
-
-            lexer.expect("(");
-            if (item.kind == SelectItem::Kind::Count && lexer.consumeIf("*"))
-            {
-                item.countStar = true;
-            }
-            else
-            {
-                item.columnName = parseIdentifier(lexer);
-            }
-            lexer.expect(")");
+            item.countStar = true;
         }
         else
         {
-            item.kind = SelectItem::Kind::Column;
             item.columnName = parseIdentifier(lexer);
         }
+        lexer.expect(")");
+    }
+    else if (token.type == TokenType::Word)
+    {
+        item.kind = SelectItem::Kind::Column;
+        item.columnName = token.text;
     }
     else
     {
@@ -485,4 +507,3 @@ SelectCommand Parser::parseSelect(Lexer& lexer) const
 
     return command;
 }
-
