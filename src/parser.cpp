@@ -67,16 +67,19 @@ Statement Parser::parseStatement(const std::string& text) const
     else if (command == "REVERT")
     {
         RevertCommand revert;
-        Token next = lexer.peek();
-        if (next.type == TokenType::Word && next.text != "YYYY" && next.text.find('.') == std::string::npos)
+        Token nextToken = lexer.peek();
+
+        // If next token is a word AND (no dots AND no dashes), it's likely a table name identifier.
+        // Timestamps usually contain '.' or '-'.
+        if (nextToken.type == TokenType::Word && nextToken.text.find('.') == std::string::npos && nextToken.text.find('-') == std::string::npos)
         {
              revert.table = parseTableName(lexer);
         }
 
         Token timestamp = lexer.next();
-        if (timestamp.type != TokenType::Word && timestamp.type != TokenType::Number)
+        if (timestamp.type != TokenType::Word && timestamp.type != TokenType::Number && timestamp.type != TokenType::String)
         {
-             throw std::runtime_error("ожидалась метка времени в REVERT");
+             throw std::runtime_error("ожидалась метка времени в REVERT (в кавычках или как слово/число)");
         }
         revert.timestamp = timestamp.text;
         statement = revert;
