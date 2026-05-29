@@ -26,7 +26,7 @@ std::string executeText(DBMS& dbms, Parser& parser, Logger& logger, const std::s
         catch (const std::exception& error)
         {
             status = "ERROR";
-            message = "\033[1;31m✕\033[0m " + std::string(error.what());
+            message = "✕ " + std::string(error.what());
             output << message << '\n';
         }
 
@@ -63,7 +63,7 @@ std::string executeTextAuthorized(DBMS& dbms, Parser& parser, Logger& logger, Au
         catch (const std::exception& error)
         {
             status = "ERROR";
-            message = "\033[1;31m✕\033[0m " + std::string(error.what());
+            message = "✕ " + std::string(error.what());
             output << message << '\n';
         }
 
