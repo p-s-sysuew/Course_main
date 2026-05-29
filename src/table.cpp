@@ -14,219 +14,233 @@
 #include <set>
 #include <stdexcept>
 
-// Создание пути схемы
+// Формирование пути к файлу описания схемы таблицы
 std::filesystem::path Table::schemaPath() const
 {
-    return tablePath_ / "schema.pb";
+    return tablePath_ / "schema.pb"; // Файл схемы в формате Protobuf
 }
 
-// Создание пути rows
+// Формирование пути к двоичному файлу с данными строк таблицы
 std::filesystem::path Table::rowsPath() const
 {
-    return tablePath_ / "rows.dat";
+    return tablePath_ / "rows.dat"; // Файл непосредственного хранения записей
 }
 
-// Кладбище
+// Формирование пути к файлу смещений удаленных записей
 std::filesystem::path Table::deletedOffsetsPath() const
 {
-    return tablePath_ / "deleted.pb";
+    return tablePath_ / "deleted.pb"; // Хранилище адресов для повторного использования пространства
 }
 
-// Папка с индексами
+// Получение пути к директории хранения индексов таблицы
 std::filesystem::path Table::indexDirectoryPath() const
 {
-    return tablePath_ / "indexes";
+    return tablePath_ / "indexes"; // Папка со всеми индексными деревьями
 }
 
-// Создание индекс-файла
+// Путь к конкретному файлу данных B*-дерева для указанного столбца
 std::filesystem::path Table::indexPath(std::size_t columnIndex) const
 {
-    return indexDirectoryPath() / (columns_[columnIndex].name + ".tree.pb");
+    return indexDirectoryPath() / (columns_[columnIndex].name + ".tree.pb"); // Файл узлов дерева
 }
 
-// meta путь
+// Путь к конфигурационному файлу метаданных индекса конкретного столбца
 std::filesystem::path Table::indexMetaPath(std::size_t columnIndex) const
 {
-    return indexDirectoryPath() / (columns_[columnIndex].name + ".tree.meta.pb");
+    return indexDirectoryPath() / (columns_[columnIndex].name + ".tree.meta.pb"); // Файл заголовка и корня дерева
 }
 
-// Путь к пулу строк
+// Формирование пути к файлу пула уникальных строк таблицы
 std::filesystem::path Table::stringPoolPath() const
 {
-    return tablePath_ / "stringpool.pb";
+    return tablePath_ / "stringpool.pb"; // Файл для оптимизации хранения повторяющихся строк
 }
 
-// Создание таблицы и файлов
+// Статический метод инициализации структуры новой таблицы на диске
 void Table::create(const std::filesystem::path& databasePath, const std::string& tableName, const std::vector<ColumnInfo>& columns)
 {
+    // Валидация имени таблицы на допустимые символы
     if (!isValidIdentifier(tableName))
     {
-        throw std::runtime_error("некорректное имя таблицы: " + tableName);
+        throw std::runtime_error("Некорректное имя таблицы: " + tableName); // Исключение при запрещенных знаках
     }
 
+    // Запрет на создание пустой таблицы без метаданных
     if (columns.empty())
     {
-        throw std::runtime_error("таблица должна содержать хотя бы один столбец");
+        throw std::runtime_error("Таблица должна содержать хотя бы один столбец"); // Ошибка пустой схемы
     }
 
-    std::filesystem::path tablePath = databasePath / tableName;
+    std::filesystem::path tablePath = databasePath / tableName; // Вычисление полной целевой папки таблицы
+    // Защита от случайной перезаписи уже существующей таблицы
     if (std::filesystem::exists(tablePath))
     {
-        throw std::runtime_error("таблица уже существует: " + tableName);
+        throw std::runtime_error("Таблица уже существует: " + tableName); // Ошибка дублирования сущности
     }
 
-    ensureDirectoryExists(tablePath);
+    ensureDirectoryExists(tablePath); // Физическое создание директории таблицы на диске
 
-    std::set<std::string> names;
+    std::set<std::string> names; // Контейнер для отслеживания уникальности имен колонок
+    // Перебор и проверка спецификаций каждого столбца
     for (std::size_t index = 0; index < columns.size(); ++index)
     {
-        const ColumnInfo& column = columns[index];
+        const ColumnInfo& column = columns[index]; // Ссылка на текущее описание столбца
 
+        // Контроль корректности названия поля
         if (!isValidIdentifier(column.name))
         {
-            throw std::runtime_error("некорректное имя столбца: " + column.name);
+            throw std::runtime_error("некорректное имя столбца: " + column.name); // Ошибка формата имени
         }
 
+        // Проверка на отсутствие дубликатов полей в рамках одной таблицы
         if (!names.insert(column.name).second)
         {
-            throw std::runtime_error("повтор имени столбца: " + column.name);
+            throw std::runtime_error("Повтор имени столбца: " + column.name); // Ошибка повторения имени
         }
 
+        // Логическое требование: индексируемые поля не могут принимать NULL
         if (column.indexed && !column.notNull)
         {
-            throw std::runtime_error("INDEXED-столбец автоматически должен быть NOT_NULL: " + column.name);
+            throw std::runtime_error("INDEXED-столбец автоматически должен быть NOT_NULL: " + column.name); // Конфликт флагов
         }
 
+        // Валидация соответствия типа дефолтного значения типу самого столбца
         if (column.hasDefault && column.defaultValue.type != ValueType::Null && !valueHasColumnType(column.defaultValue, column.type))
         {
-            throw std::runtime_error("DEFAULT имеет неверный тип для столбца " + column.name);
+            throw std::runtime_error("DEFAULT имеет неверный тип для столбца " + column.name); // Несовпадение типов данных
         }
-
     }
 
-    std::vector<std::string> schemaRecords;
-    schemaRecords.push_back(schemaToProtoBytes(columns));
-    writeSecureRecords(tablePath / "schema.pb", schemaRecords);
+    std::vector<std::string> schemaRecords; // Временный буфер под сериализованную схему
+    schemaRecords.push_back(schemaToProtoBytes(columns)); // Упаковка массива колонок в формат Protobuf
+    writeSecureRecords(tablePath / "schema.pb", schemaRecords); // Безопасное сохранение схемы в файл
 
-    createEmptySecureFile(tablePath / "rows.dat");
-    createEmptySecureFile(tablePath / "deleted.pb");
-    createEmptySecureFile(tablePath / "stringpool.pb");
-    ensureDirectoryExists(tablePath / "indexes");
+    createEmptySecureFile(tablePath / "rows.dat"); // Инициализация пустого зашифрованного файла записей
+    createEmptySecureFile(tablePath / "deleted.pb"); // Инициализация пустого файла учета удалений
+    createEmptySecureFile(tablePath / "stringpool.pb"); // Инициализация пустого файла пула строк
+    ensureDirectoryExists(tablePath / "indexes"); // Создание пустой системной директории под индексы
 
+    // Первоначальное создание файлов пустых B*-деревьев для проиндексированных полей
     for (std::size_t columnIndex = 0; columnIndex < columns.size(); ++columnIndex)
     {
         if (columns[columnIndex].indexed)
         {
+            // Создание и очистка объекта дискового B*-индекса
             DiskBStarIndex emptyIndex(
                 (tablePath / "indexes") / (columns[columnIndex].name + ".tree.pb"),
                 (tablePath / "indexes") / (columns[columnIndex].name + ".tree.meta.pb"),
                 columns[columnIndex].type
             );
-            emptyIndex.clear();
+            emptyIndex.clear(); // Запись базовой структуры пустого корневого узла дерева
         }
     }
 }
 
-// Удаление таблицы
+// Удаление каталога таблицы и всех ассоциированных с ней файлов
 void Table::drop(const std::filesystem::path& databasePath, const std::string& tableName)
 {
-    std::filesystem::path tablePath = databasePath / tableName;
+    std::filesystem::path tablePath = databasePath / tableName; // Вычисление папки удаления
 
+    // Защита от удаления отсутствующего ресурса
     if (!std::filesystem::exists(tablePath))
     {
-        throw std::runtime_error("таблица не существует: " + tableName);
+        throw std::runtime_error("Таблица не существует: " + tableName); // Ошибка удаления
     }
 
-    std::filesystem::remove_all(tablePath);
+    std::filesystem::remove_all(tablePath); // Полное рекурсивное удаление папки с диска
 }
 
-
-// Открывает таблицу, читает схему, строит индексы 
+// Конструктор: монтирует объект таблицы и считывает её текущее состояние
 Table::Table(const std::filesystem::path& databasePath, const std::string& tableName)
     : databasePath_(databasePath), tablePath_(databasePath / tableName), tableName_(tableName)
 {
+    // Валидация физического присутствия таблицы перед инициализацией
     if (!std::filesystem::exists(tablePath_))
     {
-        throw std::runtime_error("таблица не существует: " + tableName_);
+        throw std::runtime_error("Таблица не существует: " + tableName_); // Ошибка инициализации объекта
     }
 
-    loadSchema();
-    validateSchema();
-    buildIndexes();
+    loadSchema(); // Выгрузка колонок из файла схемы
+    validateSchema(); // Комплексная проверка целостности прочитанной схемы
+    buildIndexes(); // Загрузка существующих или полная реконструкция поврежденных индексов
 }
 
-// Читает столбцы из схемы
+// Загрузка метаданных схемы таблицы из бинарного файла
 void Table::loadSchema()
 {
-    columns_.clear();
+    columns_.clear(); // Сброс старого содержимого вектора колонок
 
-    std::vector<std::string> records = readSecureRecords(schemaPath());
+    std::vector<std::string> records = readSecureRecords(schemaPath()); // Чтение блоков данных схемы
     if (records.empty())
     {
-        throw std::runtime_error("не удалось открыть schema.pb для таблицы " + tableName_);
+        throw std::runtime_error("Не удалось открыть schema.pb для таблицы " + tableName_); // Ошибка структуры файла
     }
 
-    columns_ = schemaFromProtoBytes(records[0]);
+    columns_ = schemaFromProtoBytes(records[0]); // Десериализация структуры колонок из байтового потока Protobuf
 }
 
-
-
-// Валидация схемы
+// Проверка структуры схемы данных на логические несоответствия
 void Table::validateSchema() const
 {
+    // Схема обязана содержать описания колонок
     if (columns_.empty())
     {
-        throw std::runtime_error("у таблицы пустая схема: " + tableName_);
+        throw std::runtime_error("У таблицы пустая схема: " + tableName_); // Ошибка: таблица не имеет полей
     }
 
-    std::set<std::string> names;
+    std::set<std::string> names; // Локальный набор контроля уникальности имен
 
+    // Валидация каждого поля в считанном массиве
     for (std::size_t index = 0; index < columns_.size(); ++index)
     {
-        const ColumnInfo& column = columns_[index];
+        const ColumnInfo& column = columns_[index]; // Доступ к текущему описанию поля
 
         if (!isValidIdentifier(column.name))
         {
-            throw std::runtime_error("некорректное имя столбца в схеме: " + column.name);
+            throw std::runtime_error("Некорректное имя столбца в схеме: " + column.name); // Критическое имя в файле схемы
         }
 
         if (!names.insert(column.name).second)
         {
-            throw std::runtime_error("повтор имени столбца в схеме: " + column.name);
+            throw std::runtime_error("Повтор имени столбца в схеме: " + column.name); // Нарушение уникальности полей
         }
 
         if (column.indexed && !column.notNull)
         {
-            throw std::runtime_error("INDEXED-столбец должен быть NOT_NULL: " + column.name);
+            throw std::runtime_error("INDEXED-столбец должен быть NOT_NULL: " + column.name); // Нарушение ограничений целостности
         }
     }
 }
 
-// Создание индексов
+// Инициализация индексных менеджеров для таблицы
 void Table::buildIndexes()
 {
-    indexes_.clear();
-    indexes_.resize(columns_.size());
+    indexes_.clear(); // Сброс старой коллекции индексов
+    indexes_.resize(columns_.size()); // Резервирование ячеек под каждый столбец схемы
 
-    bool allIndexFilesExist = true;
+    bool allIndexFilesExist = true; // Триггер проверки целостности индексных файлов
+    // Сканирование наличия необходимых файлов деревьев на диске
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (columns_[columnIndex].indexed)
         {
+            // Проверка одновременного наличия файла данных и файла метаданных дерева
             if (!secureFileExists(indexPath(columnIndex)) || !secureFileExists(indexMetaPath(columnIndex)))
             {
-                allIndexFilesExist = false;
+                allIndexFilesExist = false; // Хотя бы один индексный компонент утерян
             }
         }
     }
 
+    // Создание объектов управления B*-деревьями в памяти
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (!columns_[columnIndex].indexed)
         {
-            continue;
+            continue; // Игнорирование неиндексируемых полей таблицы
         }
 
+        // Аллокация умного указателя на экземпляр дискового B*-дерева
         indexes_[columnIndex] = std::unique_ptr<IndexBase>(new DiskBStarIndex(
             indexPath(columnIndex),
             indexMetaPath(columnIndex),
@@ -234,1184 +248,1295 @@ void Table::buildIndexes()
         ));
     }
 
+    // Если файлы индексов повреждены или отсутствуют — запускаем полное перестроение
     if (!allIndexFilesExist)
     {
-        persistIndexesFromRows();
+        persistIndexesFromRows(); // Реконструкция структуры индексов путем сканирования всей таблицы
     }
 }
 
-// Запись структуры дерева
+// Полное перестроение B*-деревьев на основе последовательного чтения файла строк
 void Table::persistIndexesFromRows()
 {
-    ensureDirectoryExists(indexDirectoryPath());
+    ensureDirectoryExists(indexDirectoryPath()); // Гарантирование наличия папки индексов
 
-    std::vector<std::unique_ptr<IndexBase> > rebuiltIndexes;
-    rebuiltIndexes.resize(columns_.size());
+    std::vector<std::unique_ptr<IndexBase> > rebuiltIndexes; // Временный массив для перестраиваемых индексов
+    rebuiltIndexes.resize(columns_.size()); // Размещение по размеру схемы
 
+    // Подготовка чистых пустых файлов деревьев для индексируемых полей
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (!columns_[columnIndex].indexed)
         {
-            continue;
+            continue; // Пропуск полей без индекса
         }
 
+        // Инициализация объекта пустого индекса
         rebuiltIndexes[columnIndex] = std::unique_ptr<IndexBase>(new DiskBStarIndex(
             indexPath(columnIndex),
             indexMetaPath(columnIndex),
             columns_[columnIndex].type
         ));
-        rebuiltIndexes[columnIndex]->clear();
+        rebuiltIndexes[columnIndex]->clear(); // Запись чистого корневого узла на диск
     }
 
-    std::set<std::streamoff> deletedOffsets = loadDeletedOffsets();
-    std::vector<std::pair<std::streamoff, std::string> > rawRows = readSecureRecordsWithOffsets(rowsPath());
+    std::set<std::streamoff> deletedOffsets = loadDeletedOffsets(); // Загрузка позиций удаленных строк
+    std::vector<std::pair<std::streamoff, std::string> > rawRows = readSecureRecordsWithOffsets(rowsPath()); // Чтение всех сырых строк с их смещениями
 
+    // Наполнение деревьев актуальными данными из живых строк
     for (std::size_t rowIndex = 0; rowIndex < rawRows.size(); ++rowIndex)
     {
-        std::streamoff offset = rawRows[rowIndex].first;
+        std::streamoff offset = rawRows[rowIndex].first; // Смещение текущей записи в файле таблицы
+        // Пропуск записей, которые помечены как удаленные
         if (rowOffsetIsDeleted(offset, deletedOffsets))
         {
-            continue;
+            continue; // Переход к следующей строке файла
         }
 
-        Row row = rowFromProtoBytes(rawRows[rowIndex].second, columns_);
+        Row row = rowFromProtoBytes(rawRows[rowIndex].second, columns_); // Десериализация сырых байт в типизированную строку данных
 
+        // Извлечение ключей и их интеграция в соответствующие деревья
         for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
         {
             if (!columns_[columnIndex].indexed)
             {
-                continue;
+                continue; // Пропуск столбцов, не требующих индексации
             }
 
+            // Индексируемое поле обязано содержать данные
             if (row[columnIndex].type == ValueType::Null)
             {
-                throw std::runtime_error("INDEXED-столбец содержит NULL: " + columns_[columnIndex].name);
+                throw std::runtime_error("INDEXED-столбец содержит NULL: " + columns_[columnIndex].name); // Нарушение констреинта UNIQUE/NOT_NULL
             }
 
+            // Вставка ключа и файлового смещения строки в B*-дерево с контролем уникальности
             if (!rebuiltIndexes[columnIndex]->insert(row[columnIndex], offset))
             {
-                throw std::runtime_error("повтор значения INDEXED-столбца: " + columns_[columnIndex].name);
+                throw std::runtime_error("Повтор значения INDEXED-столбца: " + columns_[columnIndex].name); // Нарушение уникальности ключа индекса
             }
         }
     }
 
-    indexes_ = std::move(rebuiltIndexes);
+    indexes_ = std::move(rebuiltIndexes); // Атомарное обновление рабочих индексов таблицы восстановленными объектами
 }
 
-
-// [OLD] Сохранение деревьев
+// [Устарело] Заглушка старого метода сохранения структуры деревьев
 void Table::saveIndexesToFiles() const
 {
 }
 
-// [OLD] Загрузка B*-индекса из файла
+// [Устарело] Заглушка старого метода загрузки B*-индекса из файла
 void Table::loadIndexesFromFiles()
 {
 }
 
-// [OLD] Линейный хелпер
+// [Устарело] Вспомогательный метод записи сериализованного элемента индекса во временный буфер строк
 void Table::writeIndexEntry(std::vector<std::string>& lines, const Value& key, std::streamoff offset) const
 {
-    lines.push_back(indexEntryToProtoBytes(key, offset));
+    lines.push_back(indexEntryToProtoBytes(key, offset)); // Упаковка пары Ключ-Смещение в формат Protobuf
 }
 
-// [OLD] Чтение одной ProtoIndexEntry
+// [Устарело] Восстановление параметров ключа и смещения из сериализованной строки
 void Table::readIndexEntry(const std::string& line, ColumnType type, Value& key, std::streamoff& offset) const
 {
-    indexEntryFromProtoBytes(line, type, key, offset);
+    indexEntryFromProtoBytes(line, type, key, offset); // Десериализация одной записи индекса
 }
 
-
-// Явное обращение к файлу B*-дерева
+// Принудительное считывание заголовка метаданных индекса для верификации доступа к файлу
 void Table::touchIndexFile(std::size_t columnIndex) const
 {
-    std::vector<std::string> ignored = readSecureRecords(indexMetaPath(columnIndex));
-    (void)ignored;
+    std::vector<std::string> ignored = readSecureRecords(indexMetaPath(columnIndex)); // Холостой вызов чтения защищенного файла
+    (void)ignored; // Подавление предупреждения компилятора о неиспользуемой переменной
 }
 
-// Нахождение индекса столбца по его имени
+// Поиск порядкового индекса столбца в схеме таблицы по его строковому имени
 std::size_t Table::findColumnIndex(const std::string& name) const
 {
     for (std::size_t index = 0; index < columns_.size(); ++index)
     {
         if (columns_[index].name == name)
         {
-            return index;
+            return index; // Возврат позиции найденного столбца
         }
     }
 
-    throw std::runtime_error("неизвестный столбец '" + name + "' в таблице " + tableName_);
+    throw std::runtime_error("Неизвестный столбец '" + name + "' в таблице " + tableName_); // Ошибка: поле отсутствует в схеме
 }
 
-// Проверка notnull и совпадения типа в столбце
+// Проверка ячейки данных на ограничения NOT NULL и совместимость типов данных
 void Table::validateValueForColumn(const Value& value, const ColumnInfo& column) const
 {
+    // Обработка ситуации, когда значение пусто (NULL)
     if (value.type == ValueType::Null)
     {
         if (column.notNull)
         {
-            throw std::runtime_error("столбец '" + column.name + "' не может быть NULL");
+            throw std::runtime_error("Столбец '" + column.name + "' не может быть NULL"); // Запрет на запись NULL
         }
-        return;
+        return; // Корректно, если поле nullable
     }
 
+    // Проверка физической совместимости типа константы и типа поля
     if (!valueHasColumnType(value, column.type))
     {
-        throw std::runtime_error("неверный тип значения для столбца '" + column.name + "'");
+        throw std::runtime_error("Неверный тип значения для столбца '" + column.name + "'"); // Несовпадение типов
     }
 }
 
-// Валидация ряда
+// Комплексная валидация сформированной строки данных перед записью на диск
 void Table::validateRow(const Row& row) const
 {
+    // Контроль соответствия количества переданных значений количеству полей таблицы
     if (row.size() != columns_.size())
     {
-        throw std::runtime_error("внутренняя ошибка: размер строки не совпадает со схемой");
+        throw std::runtime_error("Внутренняя ошибка: размер строки не совпадает со схемой"); // Критическая ошибка структуры данных
     }
 
+    // Поэлементная валидация каждой ячейки строки
     for (std::size_t index = 0; index < columns_.size(); ++index)
     {
-        validateValueForColumn(row[index], columns_[index]);
+        validateValueForColumn(row[index], columns_[index]); // Вызов ограничений для ячейки
     }
 }
 
-// Существует ли операнд-колонка
+// Проверка существования столбца, указанного внутри операнда логического выражения
 void Table::validateOperand(const Operand& operand) const
 {
     if (operand.isColumn)
     {
-        findColumnIndex(operand.columnName);
+        findColumnIndex(operand.columnName); // Вызов поиска для подтверждения наличия поля в таблице
     }
 }
 
-// Тип операнда
+// Определение результирующего типа данных операнда (для колонок и литералов)
 ColumnType Table::operandType(const Operand& operand) const
 {
+    // Если операнд — колонка, возвращаем тип этой колонки из схемы
     if (operand.isColumn)
     {
         return columns_[findColumnIndex(operand.columnName)].type;
     }
 
+    // Определение типа для целочисленного литерала
     if (operand.literalValue.type == ValueType::Int)
     {
         return ColumnType::Int;
     }
 
+    // Определение типа для строкового литерала
     if (operand.literalValue.type == ValueType::String)
     {
         return ColumnType::String;
     }
 
-    return ColumnType::String;
+    return ColumnType::String; // Тип по умолчанию для неопределенных текстовых констант
 }
 
-// Валидация условия
+// Рекурсивный семантический анализ дерева условий выражения WHERE
 void Table::validateCondition(const Expr& expr) const
 {
+    // Проверка логических связок AND / OR (рекурсивный спуск в ветви дерева)
     if (expr.kind == Expr::Kind::And || expr.kind == Expr::Kind::Or)
     {
-        validateCondition(*expr.first);
-        validateCondition(*expr.second);
+        validateCondition(*expr.first); // Анализ левого поддерева условий
+        validateCondition(*expr.second); // Анализ правого поддерева условий
         return;
     }
 
+    // Валидация стандартного бинарного предиката сравнения (например, id == 5)
     if (expr.kind == Expr::Kind::Compare)
     {
-        validateOperand(expr.left);
-        validateOperand(expr.right);
+        validateOperand(expr.left); // Валидация левой части операции
+        validateOperand(expr.right); // Валидация правой части операции
 
+        // Случай А: Сравнение колонки с другой колонкой
         if (expr.left.isColumn && expr.right.isColumn)
         {
-            ColumnType leftType = operandType(expr.left);
-            ColumnType rightType = operandType(expr.right);
+            ColumnType leftType = operandType(expr.left); // Извлечение типа левого поля
+            ColumnType rightType = operandType(expr.right); // Извлечение типа правого поля
             if (leftType != rightType)
             {
-                throw std::runtime_error("в WHERE сравниваются столбцы разных типов");
+                throw std::runtime_error("В WHERE сравниваются столбцы разных типов"); // Ошибка типизации логики
             }
         }
+        // Случай Б: Сравнение колонки с константным литералом
         else if (expr.left.isColumn || expr.right.isColumn)
         {
-            Operand columnOperand = expr.left.isColumn ? expr.left : expr.right;
-            Operand literalOperand = expr.left.isColumn ? expr.right : expr.left;
+            Operand columnOperand = expr.left.isColumn ? expr.left : expr.right; // Выделение операнда-столбца
+            Operand literalOperand = expr.left.isColumn ? expr.right : expr.left; // Выделение операнда-константы
+            // Валидация соответствия типа константы типу поля, с которым она сравнивается
             if (literalOperand.literalValue.type != ValueType::Null && !valueHasColumnType(literalOperand.literalValue, columns_[findColumnIndex(columnOperand.columnName)].type))
             {
-                throw std::runtime_error("в WHERE константа имеет неверный тип");
+                throw std::runtime_error("В WHERE константа имеет неверный тип"); // Ошибка типа константы
             }
         }
         return;
     }
 
+    // Валидация условий проверки диапазона BETWEEN
     if (expr.kind == Expr::Kind::Between)
     {
-        validateOperand(expr.left);
-        validateOperand(expr.low);
-        validateOperand(expr.high);
+        validateOperand(expr.left); // Проверка целевого операнда
+        validateOperand(expr.low); // Проверка нижней границы интервала
+        validateOperand(expr.high); // Проверка верхней границы интервала
         return;
     }
 
+    // Валидация условий поиска по шаблону/регулярному выражению LIKE
     if (expr.kind == Expr::Kind::Like)
     {
-        validateOperand(expr.left);
-        validateOperand(expr.pattern);
+        validateOperand(expr.left); // Проверка целевой текстовой колонки
+        validateOperand(expr.pattern); // Проверка операнда маски регулярного выражения
         return;
     }
 }
 
-
-// Чтение всех tombstone'ов
+// Чтение всех tombstone'ов (свободных слотов удаленных записей) из файла
 std::vector<Table::FreeSlot> Table::loadFreeSlots() const
 {
-    std::vector<FreeSlot> slots;
-    std::vector<std::string> records = readSecureRecords(deletedOffsetsPath());
+    std::vector<FreeSlot> slots; // Вектор для накопления прочитанных свободных слотов
+    std::vector<std::string> records = readSecureRecords(deletedOffsetsPath()); // Чтение зашифрованных блоков из файла удалений
 
+    // Цикл десериализации каждой записи о свободном месте
     for (std::size_t index = 0; index < records.size(); ++index)
     {
-        ProtoDeletedOffset proto;
+        ProtoDeletedOffset proto; // Объект Protobuf для декодирования структуры
         if (!proto.ParseFromString(records[index]))
         {
-            throw std::runtime_error("не удалось прочитать free-list запись из deleted.pb");
+            throw std::runtime_error("Не удалось прочитать free-list запись из deleted.pb"); // Ошибка повреждения файла удалений
         }
 
-        FreeSlot slot;
-        slot.offset = static_cast<std::streamoff>(proto.offset());
-        slot.size = static_cast<std::streamoff>(proto.size());
+        FreeSlot slot; // Локальная структура свободного слота
+        slot.offset = static_cast<std::streamoff>(proto.offset()); // Извлечение файлового смещения слота
+        slot.size = static_cast<std::streamoff>(proto.size()); // Извлечение доступного размера слота
 
-        slots.push_back(slot);
+        slots.push_back(slot); // Сохранение слота в результирующий вектор
     }
 
-    return slots;
+    return slots; // Возврат списка свободных мест для повторного использования
 }
 
-// Перезапись deleted.pb
+// Перезапись файла метаданных deleted.pb актуальным списком свободных слотов
 void Table::saveFreeSlots(const std::vector<FreeSlot>& slots) const
 {
-    std::vector<std::string> records;
+    std::vector<std::string> records; // Вектор сериализованных байтовых строк
 
+    // Перевод каждого слота в формат Protobuf и упаковка в байты
     for (std::size_t index = 0; index < slots.size(); ++index)
     {
-        ProtoDeletedOffset proto;
-        proto.set_offset(static_cast<long long>(slots[index].offset));
-        proto.set_size(static_cast<long long>(slots[index].size));
+        ProtoDeletedOffset proto; // Создание Protobuf сообщения
+        proto.set_offset(static_cast<long long>(slots[index].offset)); // Запись смещения в структуру данных
+        proto.set_size(static_cast<long long>(slots[index].size)); // Запись размера слота в структуру данных
 
-        std::string bytes;
+        std::string bytes; // Строковый буфер для сериализации
         if (!proto.SerializeToString(&bytes))
         {
-            throw std::runtime_error("не удалось сериализовать free-list запись deleted.pb");
+            throw std::runtime_error("Не удалось сериализовать free-list запись deleted.pb"); // Исключение при сбое кодирования
         }
 
-        records.push_back(bytes);
+        records.push_back(bytes); // Накопление байтовых строк для сохранения
     }
 
-    writeSecureRecords(deletedOffsetsPath(), records);
+    writeSecureRecords(deletedOffsetsPath(), records); // Физическая защищенная запись обновленного списка слотов на диск
 }
 
-// Получение offset'ов tombstone'ов
+// Получение упорядоченного множества (set) смещений всех удаленных строк
 std::set<std::streamoff> Table::loadDeletedOffsets() const
 {
-    std::set<std::streamoff> deletedOffsets;
-    std::vector<FreeSlot> slots = loadFreeSlots();
+    std::set<std::streamoff> deletedOffsets; // Создание множества смещений для быстрого поиска
+    std::vector<FreeSlot> slots = loadFreeSlots(); // Чтение всех свободных слотов с диска
 
+    // Извлечение только адресной компоненты (offset) из каждого слота
     for (std::size_t index = 0; index < slots.size(); ++index)
     {
-        deletedOffsets.insert(slots[index].offset);
+        deletedOffsets.insert(slots[index].offset); // Добавление адреса в поисковое множество
     }
 
-    return deletedOffsets;
+    return deletedOffsets; // Возврат набора адресов удаленных записей
 }
 
-// Новый tombstone
+// Регистрация нового tombstone (пометка региона данных как удаленного)
 void Table::appendDeletedOffset(std::streamoff offset, std::streamoff size)
 {
-    std::vector<FreeSlot> slots = loadFreeSlots();
+    std::vector<FreeSlot> slots = loadFreeSlots(); // Чтение текущей карты свободных мест
 
+    // Проверка, не был ли данный адрес уже зарегистрирован ранее
     for (std::size_t index = 0; index < slots.size(); ++index)
     {
         if (slots[index].offset == offset)
         {
-            return;
+            return; // Выход из метода, если дубликат адреса найден
         }
     }
 
-    FreeSlot slot;
-    slot.offset = offset;
-    slot.size = size;
-    slots.push_back(slot);
-    saveFreeSlots(slots);
+    FreeSlot slot; // Формирование новой структуры свободного места
+    slot.offset = offset; // Привязка адреса освободившегося пространства
+    slot.size = size; // Привязка длины освободившегося пространства
+    slots.push_back(slot); // Добавление в общий список
+    saveFreeSlots(slots); // Фиксация измененного списка свободных слотов на диске
 }
 
-// Offset относится к tombstone'ам?
+// Проверка: относится ли переданный offset к ранее удаленной строке
 bool Table::rowOffsetIsDeleted(std::streamoff offset, const std::set<std::streamoff>& deletedOffsets) const
 {
-    return deletedOffsets.find(offset) != deletedOffsets.end();
+    return deletedOffsets.find(offset) != deletedOffsets.end(); // Поиск совпадения в кэшированном множестве
 }
 
-// Использование tombstone
+// Попытка утилизации и записи новой строки в первый подходящий по размеру свободный слот
 bool Table::tryWriteRowToFreeSlot(const std::string& rowBytes, std::streamoff& offset)
 {
-    std::vector<FreeSlot> slots = loadFreeSlots();
+    std::vector<FreeSlot> slots = loadFreeSlots(); // Получение карты доступных пустых участков файла
 
+    // Поиск слота, способного вместить бинарные данные новой записи
     for (std::size_t index = 0; index < slots.size(); ++index)
     {
         if (slots[index].size <= 0)
         {
-            continue;
+            continue; // Пропуск некорректных или пустых слотов
         }
 
+        // Попытка безопасной перезаписи данных внутри выбранного участка файла
         if (overwriteSecureRecordInSlot(rowsPath(), rowBytes, slots[index].offset, slots[index].size))
         {
-            offset = slots[index].offset;
-            slots.erase(slots.begin() + static_cast<std::ptrdiff_t>(index));
-            saveFreeSlots(slots);
-            return true;
+            offset = slots[index].offset; // Фиксация адреса вставки для вызывающей функции
+            slots.erase(slots.begin() + static_cast<std::ptrdiff_t>(index)); // Удаление занятого слота из списка свободных
+            saveFreeSlots(slots); // Сохранение обновленной карты слотов на диск
+            return true; // Индикация успешного повторного использования места
         }
     }
 
-    return false;
+    return false; // Подходящих свободных мест не найдено, требуется запись в конец файла
 }
 
-// Физическая запись строки (tombstone or end?)
+// Физическое сохранение сериализованной строки в файл (в свободный слот или в хвост)
 std::streamoff Table::writeRowToStorage(const Row& row)
 {
-    const std::string rowBytes = rowToProtoBytes(row);
+    const std::string rowBytes = rowToProtoBytes(row); // Конвертация полей строки в байтовый поток Protobuf
 
-    std::streamoff offset = 0;
+    std::streamoff offset = 0; // Инициализация переменной адреса записи
     if (tryWriteRowToFreeSlot(rowBytes, offset))
     {
-        return offset;
+        return offset; // Возврат адреса, если удалось повторно использовать старое место
     }
 
-    appendSecureRecord(rowsPath(), rowBytes, &offset);
-    return offset;
+    appendSecureRecord(rowsPath(), rowBytes, &offset); // Физическая дозапись новой строки в конец файла rows.dat
+    return offset; // Возврат смещения новой записи в файле
 }
 
-// Чтение рядов и offset из файла rows
+// Чтение всех живых рядов и их смещений с фильтрацией удаленных элементов
 std::vector<Table::StoredRow> Table::loadAllRows() const
 {
-    std::vector<StoredRow> rows;
-    std::vector<std::pair<std::streamoff, std::string> > lines = readSecureRecordsWithOffsets(rowsPath());
-    const std::set<std::streamoff> deletedOffsets = loadDeletedOffsets();
+    std::vector<StoredRow> rows; // Инициализация вектора результатов выборки
+    std::vector<std::pair<std::streamoff, std::string> > lines = readSecureRecordsWithOffsets(rowsPath()); // Извлечение всех сырых записей со смещениями
+    const std::set<std::streamoff> deletedOffsets = loadDeletedOffsets(); // Загрузка черного списка удаленных адресов
 
+    // Фильтрация и десериализация записей таблицы
     for (std::size_t index = 0; index < lines.size(); ++index)
     {
         if (rowOffsetIsDeleted(lines[index].first, deletedOffsets))
         {
-            continue;
+            continue; // Игнорирование записи, если её адрес помечен как удаленный
         }
 
-        StoredRow item;
-        item.offset = lines[index].first;
-        item.row = rowFromProtoBytes(lines[index].second, columns_);
-        rows.push_back(item);
+        StoredRow item; // Создание объекта валидной строки СУБД
+        item.offset = lines[index].first; // Перенос физического адреса строки
+        item.row = rowFromProtoBytes(lines[index].second, columns_); // Восстановление полей строки по схеме таблицы
+        rows.push_back(item); // Добавление строки в итоговую выборку
     }
 
-    return rows;
+    return rows; // Возврат массива всех неудаленных данных
 }
 
-// Чтение ряда по offset
+// Прямое чтение и декодирование одной строки по её точному смещению в файле
 Row Table::loadRowAtOffset(std::streamoff offset) const
 {
-    std::string rowBytes = readSecureRecordAtOffset(rowsPath(), offset);
-    return rowFromProtoBytes(rowBytes, columns_);
+    std::string rowBytes = readSecureRecordAtOffset(rowsPath(), offset); // Чтение сырых байт с указанной позиции файла
+    return rowFromProtoBytes(rowBytes, columns_); // Десериализация и возврат типизированной строки данных
 }
 
-
-// Добавление строки и обновление индексов
+// Добавление новой строки в таблицу с валидацией ограничений и обновлением индексов
 void Table::appendRow(const Row& row)
 {
-    validateRow(row);
+    validateRow(row); // Проверка соответствия типов данных строки схеме таблицы
 
+    // Проверка уникальности и ограничений целостности для индексируемых полей
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (!columns_[columnIndex].indexed)
         {
-            continue;
+            continue; // Пропуск полей, не имеющих B*-дерева
         }
 
         if (row[columnIndex].type == ValueType::Null)
         {
-            throw std::runtime_error("INDEXED-столбец не может быть NULL: " + columns_[columnIndex].name);
+            throw std::runtime_error("INDEXED-столбец не может быть NULL: " + columns_[columnIndex].name); // Запрет на NULL в индексах
         }
 
         if (indexes_[columnIndex]->contains(row[columnIndex]))
         {
-            throw std::runtime_error("повтор значения для INDEXED-столбца: " + columns_[columnIndex].name);
+            throw std::runtime_error("Повтор значения для INDEXED-столбца: " + columns_[columnIndex].name); // Контроль уникальности ключа
         }
     }
 
-    std::streamoff offset = writeRowToStorage(row);
+    std::streamoff offset = writeRowToStorage(row); // Сохранение строки на диск и получение её физического смещения
 
+    // Синхронная вставка ключей новой записи во все B*-деревья таблицы
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (columns_[columnIndex].indexed)
         {
-            indexes_[columnIndex]->insert(row[columnIndex], offset);
+            indexes_[columnIndex]->insert(row[columnIndex], offset); // Добавление пары Ключ-Смещение в индекс
         }
     }
 
-    saveIndexesToFiles();
+    saveIndexesToFiles(); // Фиксация измененных B*-деревьев в файлы на диске
 }
 
-// [OLD] Переписывание rows.dat и перестройка индексов
+// [Устарело] Полная перезапись файла данных rows.dat с тотальной перестройкой индексов
 void Table::rewriteRows(const std::vector<Row>& rows)
 {
-    std::set<int> intValues;
-    std::set<std::string> stringValues;
+    std::set<int> intValues; // Хелпер для уникальности целочисленных ключей
+    std::set<std::string> stringValues; // Хелпер для уникальности строковых ключей
 
+    // Предварительная проверка всей пачки строк на соответствие типам схемы
     for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
     {
-        validateRow(rows[rowIndex]);
+        validateRow(rows[rowIndex]); // Построчная валидация типов
     }
 
+    // Проверка уникальности данных во всех индексируемых колонках переданного пакета
     for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
     {
         if (!columns_[columnIndex].indexed)
         {
-            continue;
+            continue; // Игнорирование колонок без индексов
         }
 
-        intValues.clear();
-        stringValues.clear();
+        intValues.clear(); // Очистка буфера уникальности чисел для новой колонки
+        stringValues.clear(); // Очистка буфера уникальности строк для новой колонки
 
+        // Построчный контроль ограничений уникальности
         for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
         {
-            const Value& value = rows[rowIndex][columnIndex];
+            const Value& value = rows[rowIndex][columnIndex]; // Текущая проверяемая ячейка
 
             if (value.type == ValueType::Null)
             {
-                throw std::runtime_error("INDEXED-столбец не может быть NULL: " + columns_[columnIndex].name);
+                throw std::runtime_error("INDEXED-столбец не может быть NULL: " + columns_[columnIndex].name); // Запрет на NULL-значения
             }
 
             if (value.type == ValueType::Int)
             {
                 if (!intValues.insert(value.intValue).second)
                 {
-                    throw std::runtime_error("повтор значения для INDEXED-столбца: " + columns_[columnIndex].name);
+                    throw std::runtime_error("Повтор значения для INDEXED-столбца: " + columns_[columnIndex].name); // Обнаружен дубликат числа
                 }
             }
             else
             {
                 if (!stringValues.insert(*value.stringValue).second)
                 {
-                    throw std::runtime_error("повтор значения для INDEXED-столбца: " + columns_[columnIndex].name);
+                    throw std::runtime_error("Повтор значения для INDEXED-столбца: " + columns_[columnIndex].name); // Обнаружен дубликат строки
                 }
             }
         }
     }
 
-    std::vector<std::string> lines;
+    std::vector<std::string> lines; // Буфер пакета сериализованных данных
+    // Перевод всех переданных объектов строк в формат Protobuf-байтов
     for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
     {
-        lines.push_back(rowToProtoBytes(rows[rowIndex]));
+        lines.push_back(rowToProtoBytes(rows[rowIndex])); // Сериализация строки таблицы
     }
 
-    writeSecureRecords(rowsPath(), lines);
+    writeSecureRecords(rowsPath(), lines); // Физическое затирание файла rows.dat новыми записями
 
-    persistIndexesFromRows();
-    buildIndexes();
+    persistIndexesFromRows(); // Полный сброс и генерация новых B*-деревьев на основе только что записанных строк
+    buildIndexes(); // Повторная инициализация менеджеров индексов в оперативной памяти
 }
 
-
-// Получение значения столбца или константы
+// Извлечение реального значения: чтение ячейки из переданного ряда или возврат готовой константы
 Value Table::resolveOperand(const Row& row, const Operand& operand) const
 {
     if (operand.isColumn)
     {
-        return row[findColumnIndex(operand.columnName)];
+        return row[findColumnIndex(operand.columnName)]; // Поиск и возврат значения ячейки из структуры строки
     }
 
-    return operand.literalValue;
+    return operand.literalValue; // Возврат неизменяемого константного значения
 }
 
-// Сравнение значений по оператору
+// Сравнение двух сущностей Value на основе переданного арифметического оператора сравнения
 bool Table::compareOperands(const Value& left, const Value& right, CompareOp op) const
 {
+    // Любые операции сравнения (кроме явных проверок на NULL) с неопределенным значением ложны
     if (left.type == ValueType::Null || right.type == ValueType::Null)
     {
-        return false;
+        return false; // Логика обработки неопределенности в SQL
     }
 
-    int cmp = compareValues(left, right);
+    int cmp = compareValues(left, right); // Вызов низкоуровневой функции сравнения (-1, 0, 1)
 
-    if (op == CompareOp::Eq) return cmp == 0;
-    if (op == CompareOp::NotEq) return cmp != 0;
-    if (op == CompareOp::Less) return cmp < 0;
-    if (op == CompareOp::LessOrEq) return cmp <= 0;
-    if (op == CompareOp::Greater) return cmp > 0;
-    if (op == CompareOp::GreaterOrEq) return cmp >= 0;
+    if (op == CompareOp::Eq) return cmp == 0; // Оператор "равно"
+    if (op == CompareOp::NotEq) return cmp != 0; // Оператор "не равно"
+    if (op == CompareOp::Less) return cmp < 0; // Оператор "меньше"
+    if (op == CompareOp::LessOrEq) return cmp <= 0; // Оператор "меньше или равно"
+    if (op == CompareOp::Greater) return cmp > 0; // Оператор "больше"
+    if (op == CompareOp::GreaterOrEq) return cmp >= 0; // Оператор "больше или равно"
 
-    return false;
+    return false; // Защитный возврат ложного значения при неизвестном операторе
 }
 
-// Проверяет строку по where
+// Вычисление соответствия строки логическому дереву выражений секции WHERE
 bool Table::rowMatches(const Row& row, const Expr& expr) const
 {
+    // Обработка логического И (AND): оба условия обязаны выполняться
     if (expr.kind == Expr::Kind::And)
     {
-        return rowMatches(row, *expr.first) && rowMatches(row, *expr.second);
+        return rowMatches(row, *expr.first) && rowMatches(row, *expr.second); // Рекурсивная проверка левой и правой ветви
     }
 
+    // Обработка логического ИЛИ (OR): достаточно выполнения одного из условий
     if (expr.kind == Expr::Kind::Or)
     {
-        return rowMatches(row, *expr.first) || rowMatches(row, *expr.second);
+        return rowMatches(row, *expr.first) || rowMatches(row, *expr.second); // Рекурсивная проверка ветвей выражения
     }
 
+    // Вычисление базового арифметического сравнения (например, цена > 100)
     if (expr.kind == Expr::Kind::Compare)
     {
-        Value left = resolveOperand(row, expr.left);
-        Value right = resolveOperand(row, expr.right);
-        return compareOperands(left, right, expr.compareOp);
+        Value left = resolveOperand(row, expr.left); // Разрешение левого аргумента сравнения
+        Value right = resolveOperand(row, expr.right); // Разрешение правого аргумента сравнения
+        return compareOperands(left, right, expr.compareOp); // Вычисление результата операции
     }
 
+    // Вычисление оператора попадания в диапазон BETWEEN (включая нижнюю, исключая верхнюю границу)
     if (expr.kind == Expr::Kind::Between)
     {
-        Value value = resolveOperand(row, expr.left);
-        Value low = resolveOperand(row, expr.low);
-        Value high = resolveOperand(row, expr.high);
+        Value value = resolveOperand(row, expr.left); // Извлечение проверяемой переменной
+        Value low = resolveOperand(row, expr.low); // Извлечение нижней границы интервала
+        Value high = resolveOperand(row, expr.high); // Извлечение верхней границы интервала
 
+        // Если хотя бы один элемент диапазона неопределен — условие не выполняется
         if (value.type == ValueType::Null || low.type == ValueType::Null || high.type == ValueType::Null)
         {
-            return false;
+            return false; // Возврат false при наличии NULL
         }
 
-        return compareValues(value, low) >= 0 && compareValues(value, high) < 0;
+        return compareValues(value, low) >= 0 && compareValues(value, high) < 0; // Проверка вхождения в границы [low, high)
     }
 
+    // Вычисление оператора LIKE с помощью сопоставления текста регулярным выражениям C++
     if (expr.kind == Expr::Kind::Like)
     {
-        Value value = resolveOperand(row, expr.left);
-        Value pattern = resolveOperand(row, expr.pattern);
+        Value value = resolveOperand(row, expr.left); // Чтение текстового значения из проверяемой строки
+        Value pattern = resolveOperand(row, expr.pattern); // Чтение маски поиска (регулярного выражения)
 
+        // Проверка применимости: оба операнда обязаны быть строго строкового типа
         if (value.type != ValueType::String || pattern.type != ValueType::String)
         {
-            return false;
+            return false; // Логическая ошибка типов ведет к невыполнению условия
         }
 
-        return std::regex_match(*value.stringValue, std::regex(*pattern.stringValue));
+        return std::regex_match(*value.stringValue, std::regex(*pattern.stringValue)); // Выполнение проверки соответствия регулярному выражению
     }
 
-    return false;
+    return false; // Страховочный сброс, если тип выражения не распознан
 }
 
-
-// Переворот оператора
+// Инверсия операторов знака сравнения при зеркальном изменении порядка операндов
 CompareOp Table::reverseCompareOp(CompareOp op) const
 {
-    if (op == CompareOp::Less) return CompareOp::Greater;
-    if (op == CompareOp::LessOrEq) return CompareOp::GreaterOrEq;
-    if (op == CompareOp::Greater) return CompareOp::Less;
-    if (op == CompareOp::GreaterOrEq) return CompareOp::LessOrEq;
-    return op;
+    if (op == CompareOp::Less) return CompareOp::Greater; // Меньше преобразуется в Больше
+    if (op == CompareOp::LessOrEq) return CompareOp::GreaterOrEq; // Меньше или равно преобразуется в Больше или равно
+    if (op == CompareOp::Greater) return CompareOp::Less; // Больше преобразуется в Меньше
+    if (op == CompareOp::GreaterOrEq) return CompareOp::LessOrEq; // Больше или равно преобразуется в Меньше или равно
+    return op; // Равно и Не равно остаются неизменными при перестановке мест
 }
 
-// Можно ли использовать индексный доступ при сравнении
+// Попытка оптимизации поиска по бинарному сравнению с использованием B*-дерева
 bool Table::tryUseIndexForCompare(const Expr& expr, std::vector<std::streamoff>& offsets) const
 {
     if (expr.kind != Expr::Kind::Compare)
     {
-        return false;
+        return false; // Отказ, если выражение не является операцией бинарного сравнения
     }
 
-    Operand columnOperand = expr.left;
-    Operand literalOperand = expr.right;
-    CompareOp op = expr.compareOp;
+    Operand columnOperand = expr.left; // Проекция левой части выражения
+    Operand literalOperand = expr.right; // Проекция правой части выражения
+    CompareOp op = expr.compareOp; // Извлечение знака сравнения
 
+    // Зеркалирование структуры выражения, если колонка находится в правой части (например, 5 == id)
     if (!columnOperand.isColumn && literalOperand.isColumn)
     {
-        columnOperand = expr.right;
-        literalOperand = expr.left;
-        op = reverseCompareOp(op);
+        columnOperand = expr.right; // Перенос колонки влево
+        literalOperand = expr.left; // Перенос константы вправо
+        op = reverseCompareOp(op); // Корректировка знака сравнения на противоположный
     }
 
+    // Если структура выражения не соответствует шаблону (Колонка Сравнение Константа) — индекс неприменим
     if (!columnOperand.isColumn || literalOperand.isColumn)
     {
-        return false;
+        return false; // Отказ в оптимизации
     }
 
-    std::size_t columnIndex = findColumnIndex(columnOperand.columnName);
+    std::size_t columnIndex = findColumnIndex(columnOperand.columnName); // Поиск физического индекса поля в схеме таблицы
     if (!columns_[columnIndex].indexed)
     {
-        return false;
+        return false; // Отказ, если для данного столбца не было создано B*-дерево
     }
 
     if (literalOperand.literalValue.type == ValueType::Null)
     {
-        return false;
+        return false; // Индекс неприменим для проверок с неопределенными значениями (NULL)
     }
 
     if (!valueHasColumnType(literalOperand.literalValue, columns_[columnIndex].type))
     {
-        return false;
+        return false; // Отказ при несовпадении типов константы поиска и самого проиндексированного поля
     }
 
-    touchIndexFile(columnIndex);
+    touchIndexFile(columnIndex); // Проверка доступности и актуальности индексного файла на диске
 
+    // Сценарий точечной выборки по точному совпадению (Оператор ==)
     if (op == CompareOp::Eq)
     {
-        std::optional<std::streamoff> found = indexes_[columnIndex]->find(literalOperand.literalValue);
+        std::optional<std::streamoff> found = indexes_[columnIndex]->find(literalOperand.literalValue); // Поиск смещения в B*-дереве
         if (found.has_value())
         {
-            offsets.push_back(found.value());
+            offsets.push_back(found.value()); // Накопление найденного адреса строки таблицы
         }
-        return true;
+        return true; // Индекс успешно отработал точечный запрос
     }
 
+    // Сценарий диапазонного сканирования левой части дерева (Оператор <)
     if (op == CompareOp::Less)
     {
-        offsets = indexes_[columnIndex]->lessThan(literalOperand.literalValue, false);
-        return true;
+        offsets = indexes_[columnIndex]->lessThan(literalOperand.literalValue, false); // Извлечение адресов строк строго меньше ключа
+        return true; // Индекс отработал диапазон
     }
 
+    // Сценарий диапазонного сканирования левой части дерева включая ключ (Оператор <=)
     if (op == CompareOp::LessOrEq)
     {
-        offsets = indexes_[columnIndex]->lessThan(literalOperand.literalValue, true);
-        return true;
+        offsets = indexes_[columnIndex]->lessThan(literalOperand.literalValue, true); // Извлечение адресов строк меньше или равных ключу
+        return true; // Индекс отработал диапазон
     }
 
+    // Сценарий диапазонного сканирования правой части дерева (Оператор >)
     if (op == CompareOp::Greater)
     {
-        offsets = indexes_[columnIndex]->greaterThan(literalOperand.literalValue, false);
-        return true;
+        offsets = indexes_[columnIndex]->greaterThan(literalOperand.literalValue, false); // Извлечение адресов строк строго больше ключа
+        return true; // Индекс отработал диапазон
     }
 
+    // Сценарий диапазонного сканирования правой части дерева включая ключ (Оператор >=)
     if (op == CompareOp::GreaterOrEq)
     {
-        offsets = indexes_[columnIndex]->greaterThan(literalOperand.literalValue, true);
-        return true;
+        offsets = indexes_[columnIndex]->greaterThan(literalOperand.literalValue, true); // Извлечение адресов строк больше или равных ключу
+        return true; // Индекс отработал диапазон
     }
 
-    return false;
+    return false; // Защитный возврат false для нереализованных операторов сравнения
 }
 
-// Можно ли использовать индексный доступ для between
+// Попытка оптимизации диапазонного поиска BETWEEN с использованием преимуществ B*-дерева
 bool Table::tryUseIndexForBetween(const Expr& expr, std::vector<std::streamoff>& offsets) const
 {
     if (expr.kind != Expr::Kind::Between)
     {
-        return false;
+        return false; // Отказ, если тип логического выражения не BETWEEN
     }
 
+    // Для работы индекса проверяемый операнд должен быть колонкой, а границы — чистыми константами
     if (!expr.left.isColumn || expr.low.isColumn || expr.high.isColumn)
     {
-        return false;
+        return false; // Отказ в оптимизации из-за неверной структуры аргументов
     }
 
-    std::size_t columnIndex = findColumnIndex(expr.left.columnName);
+    std::size_t columnIndex = findColumnIndex(expr.left.columnName); // Идентификация столбца в схеме
     if (!columns_[columnIndex].indexed)
     {
-        return false;
+        return false; // Отказ, если поле не имеет построенного дискового индекса
     }
 
-    touchIndexFile(columnIndex);
-    offsets = indexes_[columnIndex]->between(expr.low.literalValue, expr.high.literalValue);
-    return true;
+    touchIndexFile(columnIndex); // Валидация дескриптора индексного файла на диске
+    offsets = indexes_[columnIndex]->between(expr.low.literalValue, expr.high.literalValue); // Эффективное извлечение диапазона адресов из B*-дерева
+    return true; // Индекс успешно вернул адреса строк для диапазона BETWEEN
 }
 
-// Можно ли использовать индекс
+// Универсальный диспетчер подсистемы индексации: проверяет возможность ускорения выборки
 bool Table::tryUseIndex(const Expr& expr, std::vector<std::streamoff>& offsets) const
 {
+    // Попытка применить индекс для ускорения бинарного сравнения
     if (tryUseIndexForCompare(expr, offsets))
     {
-        return true;
+        return true; // Оптимизация успешно применена
     }
 
+    // Попытка применить индекс для ускорения диапазонного поиска BETWEEN
     if (tryUseIndexForBetween(expr, offsets))
     {
-        return true;
+        return true; // Оптимизация успешно применена
     }
 
+    // Рекурсивный анализ сложного составного условия, объединенного через логическое И (AND)
     if (expr.kind == Expr::Kind::And)
     {
+        // Попытка извлечь выгоду и применить индекс к левой части составного условия
         if (tryUseIndex(*expr.first, offsets))
         {
-            return true;
+            return true; // Левая ветвь успешно оптимизирована индексом
         }
 
+        // Попытка извлечь выгоду и применить индекс к правой части составного условия
         if (tryUseIndex(*expr.second, offsets))
         {
-            return true;
+            return true; // Правая ветвь успешно оптимизирована индексом
         }
     }
 
-    return false;
+    return false; // Индексируемых полей в выражении не обнаружено, будет задействовано полное сканирование таблицы (Full Table Scan)
 }
 
-// Получение offset-кандидатов
+
+// Получение множества смещений-кандидатов на основе переданного логического условия
 std::set<std::streamoff> Table::indexedCandidateOffsets(const Expr& condition, bool& usedIndex) const
 {
-    std::set<std::streamoff> candidates;
-    std::vector<std::streamoff> offsets;
-    usedIndex = false;
+    std::set<std::streamoff> candidates; // Результирующее уникальное множество смещений
+    std::vector<std::streamoff> offsets; // Временный вектор для адресов из B*-дерева
+    usedIndex = false; // Изначально сбрасываем флаг использования индекса
 
+    // Попытка извлечь адреса строк по индексу
     if (tryUseIndex(condition, offsets))
     {
-        usedIndex = true;
+        usedIndex = true; // Фиксация факта успешного применения оптимизации
+        // Перенос всех найденных адресов во множество для быстрого O(1) поиска
         for (std::size_t index = 0; index < offsets.size(); ++index)
         {
-            candidates.insert(offsets[index]);
+            candidates.insert(offsets[index]); // Вставка смещения во множество
         }
     }
 
-    return candidates;
+    return candidates; // Возврат сформированных кандидатов на выборку
 }
 
-// Загрузка Row + Offset
+// Загрузка структуры StoredRow (строка + её смещение) по переданному массиву адресов
 std::vector<Table::StoredRow> Table::loadStoredRowsByOffsets(const std::vector<std::streamoff>& offsets) const
 {
-    std::vector<StoredRow> rows;
+    std::vector<StoredRow> rows; // Буфер для прочитанных строк с метаданными
+    // Последовательное точечное чтение строк с диска по адресам
     for (std::size_t index = 0; index < offsets.size(); ++index)
     {
-        StoredRow item;
-        item.offset = offsets[index];
-        item.row = loadRowAtOffset(offsets[index]);
-        rows.push_back(item);
+        StoredRow item; // Создание контейнера строки
+        item.offset = offsets[index]; // Сохранение физического смещения
+        item.row = loadRowAtOffset(offsets[index]); // Чтение и десериализация полей строки
+        rows.push_back(item); // Накопление в результирующем векторе
     }
-    return rows;
+    return rows; // Возврат упакованных строк
 }
 
-// Загрузка строк, найденных индексом
+// Загрузка чистых объектов данных Row по массиву смещений, полученных из индекса
 std::vector<Row> Table::loadRowsByOffsets(const std::vector<std::streamoff>& offsets) const
 {
-    std::vector<Row> rows;
+    std::vector<Row> rows; // Создание вектора для хранения строк данных
 
+    // Прямой посимвольный обход адресов и чтение записей
     for (std::size_t index = 0; index < offsets.size(); ++index)
     {
-        rows.push_back(loadRowAtOffset(offsets[index]));
+        rows.push_back(loadRowAtOffset(offsets[index])); // Чтение строки по смещению и запись в вектор
     }
 
-    return rows;
+    return rows; // Возврат массива прочитанных строк
 }
 
-// INSERT ряда в таблицу
+// Вставка (INSERT) пакета новых строк с сопоставлением колонок и подстановкой DEFAULT
 std::size_t Table::insertRows(const std::vector<std::string>& columns, const std::vector<std::vector<Value> >& rows)
 {
+    // Запрос на добавление обязан содержать перечень целевых полей
     if (columns.empty())
     {
-        throw std::runtime_error("INSERT должен содержать хотя бы один столбец");
+        throw std::runtime_error("INSERT должен содержать хотя бы один столбец"); // Ошибка синтаксиса вставки
     }
 
-    std::set<std::string> usedColumns;
-    std::vector<std::size_t> targetIndexes;
+    std::set<std::string> usedColumns; // Множество для проверки дублирования имен полей в запросе
+    std::vector<std::size_t> targetIndexes; // Карта соответствия позиций запроса позициям в схеме таблицы
 
+    // Поиск физических индексов полей в схеме и контроль уникальности упоминания
     for (std::size_t index = 0; index < columns.size(); ++index)
     {
+        // Контроль: одна и та же колонка не должна наполняться дважды за запрос
         if (!usedColumns.insert(columns[index]).second)
         {
-            throw std::runtime_error("столбец указан дважды в INSERT: " + columns[index]);
+            throw std::runtime_error("столбец указан дважды в INSERT: " + columns[index]); // Дублирование столбца
         }
-        targetIndexes.push_back(findColumnIndex(columns[index]));
+        targetIndexes.push_back(findColumnIndex(columns[index])); // Сохранение порядкового номера поля из схемы
     }
 
-    std::vector<Row> preparedRows;
+    std::vector<Row> preparedRows; // Буфер для валидированных и дополненных строк
 
+    // Цикл разбора и подготовки каждой строки из пакета вставки
     for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
     {
+        // Количество переданных значений должно строго соответствовать списку колонок INSERT
         if (rows[rowIndex].size() != columns.size())
         {
-            throw std::runtime_error("количество значений в INSERT не совпадает с количеством столбцов");
+            throw std::runtime_error("количество значений в INSERT не совпадает с количеством столбцов"); // Несовпадение размерности аргументов
         }
 
-        Row row(columns_.size(), makeNull());
+        Row row(columns_.size(), makeNull()); // Инициализация строки СУБД, заполненной по умолчанию NULL
 
+        // Распределение переданных констант по их реальным физическим позициям в схеме
         for (std::size_t valueIndex = 0; valueIndex < rows[rowIndex].size(); ++valueIndex)
         {
-            row[targetIndexes[valueIndex]] = rows[rowIndex][valueIndex];
+            row[targetIndexes[valueIndex]] = rows[rowIndex][valueIndex]; // Запись значения в нужный слот
         }
 
+        // Автоматическая подстановка DEFAULT-значений в пустые (NULL) ячейки
         for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
         {
+            // Если значение пропущено, но у столбца настроен модификатор DEFAULT
             if (row[columnIndex].type == ValueType::Null && columns_[columnIndex].hasDefault)
             {
-                row[columnIndex] = columns_[columnIndex].defaultValue;
+                row[columnIndex] = columns_[columnIndex].defaultValue; // Замещение NULL дефолтным значением
             }
         }
 
-        validateRow(row);
-        preparedRows.push_back(row);
+        validateRow(row); // Комплексная проверка типов данных и констреинтов строки
+        preparedRows.push_back(row); // Сохранение полностью готовой строки в буфер
     }
 
+    // Физическое сохранение подготовленных строк на диск и регистрация в B*-деревьях
     for (std::size_t rowIndex = 0; rowIndex < preparedRows.size(); ++rowIndex)
     {
-        appendRow(preparedRows[rowIndex]);
+        appendRow(preparedRows[rowIndex]); // Атомарная запись строки таблицы
     }
 
-    return preparedRows.size();
+    return preparedRows.size(); // Возврат общего числа добавленных записей
 }
 
-// UPDATE рядов по where
+// Модификация (UPDATE) строк, удовлетворяющих выражению WHERE
 std::size_t Table::updateRows(const std::vector<UpdateAssignment>& assignments, const Expr& condition)
 {
-    validateCondition(condition);
+    validateCondition(condition); // Семантическая проверка структуры дерева условий WHERE
 
+    // Предварительная валидация: проверяем типы присваиваемых значений еще до изменения данных
     for (std::size_t assignmentIndex = 0; assignmentIndex < assignments.size(); ++assignmentIndex)
     {
-        std::size_t columnIndex = findColumnIndex(assignments[assignmentIndex].columnName);
-        validateValueForColumn(assignments[assignmentIndex].value, columns_[columnIndex]);
+        std::size_t columnIndex = findColumnIndex(assignments[assignmentIndex].columnName); // Поиск целевого поля
+        validateValueForColumn(assignments[assignmentIndex].value, columns_[columnIndex]); // Проверка типа константы констреинтам поля
     }
 
-    bool usedIndex = false;
-    std::set<std::streamoff> candidates = indexedCandidateOffsets(condition, usedIndex);
-    std::vector<StoredRow> stored = loadAllRows();
+    bool usedIndex = false; // Флаг применения индекса при фильтрации
+    std::set<std::streamoff> candidates = indexedCandidateOffsets(condition, usedIndex); // Выделение адресов-кандидатов через индекс
+    std::vector<StoredRow> stored = loadAllRows(); // Загрузка всех неудаленных строк таблицы для сканирования
 
+    // Локальная структура для кэширования транзакции изменения строки
     struct PendingUpdate
     {
-        std::streamoff oldOffset = 0;
-        Row oldRow;
-        Row newRow;
+        std::streamoff oldOffset = 0; // Прежний адрес строки в файле
+        Row oldRow; // Копия исходной строки до модификации
+        Row newRow; // Новая модифицированная строка
     };
 
-    std::vector<PendingUpdate> pending;
+    std::vector<PendingUpdate> pending; // Список строк, одобренных к обновлению
 
+    // Этап 1: Поиск строк для изменения и конструирование новых значений
     for (std::size_t rowIndex = 0; rowIndex < stored.size(); ++rowIndex)
     {
-        bool mayMatch = true;
+        bool mayMatch = true; // Флаг первичного отбора
+        // Оптимизация: если сработал индекс, проверяем присутствие адреса строки в кандидатах
         if (usedIndex)
         {
-            mayMatch = candidates.find(stored[rowIndex].offset) != candidates.end();
+            mayMatch = candidates.find(stored[rowIndex].offset) != candidates.end(); // Проверка вхождения смещения
         }
 
+        // Полное вычисление WHERE для строк, прошедших первичный отбор
         if (mayMatch && rowMatches(stored[rowIndex].row, condition))
         {
-            Row newRow = stored[rowIndex].row;
+            Row newRow = stored[rowIndex].row; // Клонирование текущих данных строки
+            // Применение всех инструкций присваивания (SET) к новой строке
             for (std::size_t assignmentIndex = 0; assignmentIndex < assignments.size(); ++assignmentIndex)
             {
-                std::size_t columnIndex = findColumnIndex(assignments[assignmentIndex].columnName);
-                newRow[columnIndex] = assignments[assignmentIndex].value;
+                std::size_t columnIndex = findColumnIndex(assignments[assignmentIndex].columnName); // Индекс изменяемого поля
+                newRow[columnIndex] = assignments[assignmentIndex].value; // Запись нового значения в ячейку
             }
 
-            validateRow(newRow);
+            validateRow(newRow); // Проверка новой структуры строки на ограничения целостности
 
-            PendingUpdate item;
-            item.oldOffset = stored[rowIndex].offset;
-            item.oldRow = stored[rowIndex].row;
-            item.newRow = newRow;
-            pending.push_back(item);
+            PendingUpdate item; // Создание задачи на обновление
+            item.oldOffset = stored[rowIndex].offset; // Фиксация старого адреса
+            item.oldRow = stored[rowIndex].row; // Фиксация старых данных
+            item.newRow = newRow; // Фиксация новых данных
+            pending.push_back(item); // Добавление задачи в пул отложенных действий
         }
     }
 
+    // Этап 2: Превентивная проверка констреинтов UNIQUE для проиндексированных полей
     for (std::size_t updateIndex = 0; updateIndex < pending.size(); ++updateIndex)
     {
         for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
         {
             if (!columns_[columnIndex].indexed)
             {
-                continue;
+                continue; // Работаем только со столбцами, имеющими B*-дерево
             }
 
-            const Value& oldValue = pending[updateIndex].oldRow[columnIndex];
-            const Value& newValue = pending[updateIndex].newRow[columnIndex];
+            const Value& oldValue = pending[updateIndex].oldRow[columnIndex]; // Исходное значение ячейки
+            const Value& newValue = pending[updateIndex].newRow[columnIndex]; // Новое значение ячейки
 
-            bool changed = false;
+            bool changed = false; // Триггер факта изменения данных в ключевом поле
             if (oldValue.type != newValue.type)
             {
-                changed = true;
+                changed = true; // Смена типа (например, с NULL на INT) означает изменение
             }
             else if (oldValue.type != ValueType::Null)
             {
-                changed = compareValues(oldValue, newValue) != 0;
+                changed = compareValues(oldValue, newValue) != 0; // Арифметическое сравнение значений ключа
             }
 
+            // Запрет на генерацию дубликатов в уникальном INDEXED-поле
             if (changed && indexes_[columnIndex]->contains(newValue))
             {
-                throw std::runtime_error("UPDATE нарушает уникальность INDEXED-столбца: " + columns_[columnIndex].name);
+                throw std::runtime_error("UPDATE нарушает уникальность INDEXED-столбца: " + columns_[columnIndex].name); // Конфликт уникальности
             }
         }
     }
 
+    // Этап 3: Физическая перезапись данных на диске и актуализация B*-деревьев
     for (std::size_t updateIndex = 0; updateIndex < pending.size(); ++updateIndex)
     {
-        std::streamoff newOffset = writeRowToStorage(pending[updateIndex].newRow);
-        std::streamoff oldSize = secureRecordTotalSizeAtOffset(rowsPath(), pending[updateIndex].oldOffset);
-        appendDeletedOffset(pending[updateIndex].oldOffset, oldSize);
+        std::streamoff newOffset = writeRowToStorage(pending[updateIndex].newRow); // Запись обновленной строки на новое место диска
+        std::streamoff oldSize = secureRecordTotalSizeAtOffset(rowsPath(), pending[updateIndex].oldOffset); // Замер размера старой записи
+        appendDeletedOffset(pending[updateIndex].oldOffset, oldSize); // Перевод старого адреса в категорию свободных слотов (tombstone)
 
+        // Обновление указателей внутри B*-деревьев для модифицированной записи
         for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
         {
             if (!columns_[columnIndex].indexed)
             {
-                continue;
+                continue; // Игнорирование неиндексируемых столбцов
             }
 
-            indexes_[columnIndex]->erase(pending[updateIndex].oldRow[columnIndex]);
-            indexes_[columnIndex]->insert(pending[updateIndex].newRow[columnIndex], newOffset);
+            indexes_[columnIndex]->erase(pending[updateIndex].oldRow[columnIndex]); // Удаление старого ключа из дерева
+            indexes_[columnIndex]->insert(pending[updateIndex].newRow[columnIndex], newOffset); // Монтирование нового ключа со смещением
         }
     }
 
+    // Если изменения состоялись — фиксируем новые состояния B*-деревьев в файлы
     if (!pending.empty())
     {
-        saveIndexesToFiles();
+        saveIndexesToFiles(); // Перезапись файлов индексов на диске
     }
 
-    return pending.size();
+    return pending.size(); // Возврат количества успешно измененных записей
 }
 
-// DELETE рядов по where
+// Удаление (DELETE) строк, подпадающих под условия WHERE
 std::size_t Table::deleteRows(const Expr& condition)
 {
-    validateCondition(condition);
+    validateCondition(condition); // Проверка корректности дерева выражений селектора WHERE
 
-    bool usedIndex = false;
-    std::set<std::streamoff> candidates = indexedCandidateOffsets(condition, usedIndex);
-    std::vector<StoredRow> stored = loadAllRows();
-    std::size_t deleted = 0;
+    bool usedIndex = false; // Маркер использования индексной оптимизации
+    std::set<std::streamoff> candidates = indexedCandidateOffsets(condition, usedIndex); // Поиск адресов через B*-дерево
+    std::vector<StoredRow> stored = loadAllRows(); // Загрузка всех активных записей из таблицы
+    std::size_t deleted = 0; // Счетчик удаленных записей
 
+    // Перебор строк и их логическое удаление
     for (std::size_t rowIndex = 0; rowIndex < stored.size(); ++rowIndex)
     {
-        bool mayMatch = true;
+        bool mayMatch = true; // Предварительное согласие на соответствие критериям
+        // Фильтрация по списку смещений, если отработал поисковый индекс
         if (usedIndex)
         {
-            mayMatch = candidates.find(stored[rowIndex].offset) != candidates.end();
+            mayMatch = candidates.find(stored[rowIndex].offset) != candidates.end(); // Проверка вхождения смещения в индексный кэш
         }
 
+        // Финальная проверка строки предикатом WHERE
         if (mayMatch && rowMatches(stored[rowIndex].row, condition))
         {
-            std::streamoff oldSize = secureRecordTotalSizeAtOffset(rowsPath(), stored[rowIndex].offset);
-            appendDeletedOffset(stored[rowIndex].offset, oldSize);
+            std::streamoff oldSize = secureRecordTotalSizeAtOffset(rowsPath(), stored[rowIndex].offset); // Определение длины удаляемой записи
+            appendDeletedOffset(stored[rowIndex].offset, oldSize); // Добавление адреса строки в список удалений (free-list слоты)
 
+            // Каскадное изъятие ключей удаленной строки из всех B*-деревьев таблицы
             for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
             {
                 if (columns_[columnIndex].indexed)
                 {
-                    indexes_[columnIndex]->erase(stored[rowIndex].row[columnIndex]);
+                    indexes_[columnIndex]->erase(stored[rowIndex].row[columnIndex]); // Удаление ключа из текущего индекса
                 }
             }
 
-            ++deleted;
+            ++deleted; // Инкремент счетчика удалений
         }
     }
 
+    // Сохранение изменений в индексах, если хотя бы одна строка была стерта
     if (deleted > 0)
     {
-        saveIndexesToFiles();
+        saveIndexesToFiles(); // Актуализация файлов индексов на диске
     }
 
-    return deleted;
+    return deleted; // Возврат числа уничтоженных строк
 }
 
-// Есть ли в SELECT агрегаты
+// Инспекция полей SELECT: проверяет наличие вызовов агрегатных функций (SUM, COUNT, AVG)
 bool Table::itemsContainAggregates(const std::vector<SelectItem>& items) const
 {
     for (std::size_t index = 0; index < items.size(); ++index)
     {
+        // Если тип элемента выборки отличен от стандартного Column — это агрегат
         if (items[index].kind != SelectItem::Kind::Column)
         {
-            return true;
+            return true; // Обнаружена агрегатная функция
         }
     }
-    return false;
+    return false; // Запрос содержит только перечисление обычных полей
 }
 
-// Генерирует имя для агрегата
+// Формирование итогового текстового ключа (имени колонки) для вывода агрегата в JSON
 std::string Table::defaultAggregateName(const SelectItem& item) const
 {
+    // Приоритет отдается явно заданному пользователем псевдониму (модификатор AS)
     if (item.alias.has_value())
     {
-        return item.alias.value();
+        return item.alias.value(); // Использование алиаса в качестве ключа
     }
 
+    // Генерация автоматического имени для функции подсчета строк COUNT
     if (item.kind == SelectItem::Kind::Count)
     {
-        if (item.countStar) return "COUNT(*)";
-        return "COUNT(" + item.columnName + ")";
+        if (item.countStar) return "COUNT(*)"; // Имя для общего подсчета строк
+        return "COUNT(" + item.columnName + ")"; // Имя для подсчета строк с NOT NULL значениями поля
     }
 
+    // Автоматическое имя для функции суммирования SUM
     if (item.kind == SelectItem::Kind::Sum)
     {
-        return "SUM(" + item.columnName + ")";
+        return "SUM(" + item.columnName + ")"; // Название результирующего агрегата
     }
 
+    // Автоматическое имя для расчета среднего арифметического AVG
     if (item.kind == SelectItem::Kind::Avg)
     {
-        return "AVG(" + item.columnName + ")";
+        return "AVG(" + item.columnName + ")"; // Название результирующего агрегата
     }
 
-    return item.columnName;
+    return item.columnName; // Возврат базового имени, если тип определить не удалось
 }
 
-// Считает по агрегату и формирует json
+// Расчет агрегатных функций по массиву строк и формирование результирующего JSON-объекта
 std::string Table::makeAggregateJson(const std::vector<Row>& rows, const std::vector<SelectItem>& items) const
 {
-    std::map<std::string, Value> object;
+    std::map<std::string, Value> object; // Ассоциативная карта одной строки результатов агрегации
 
+    // Вычисление каждого агрегатного поля, запрошенного в SELECT
     for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex)
     {
-        const SelectItem& item = items[itemIndex];
-        std::string name = defaultAggregateName(item);
+        const SelectItem& item = items[itemIndex]; // Ссылка на описание элемента выборки
+        std::string name = defaultAggregateName(item); // Вычисление заголовка результирующей колонки
 
+        // Вычисление значения агрегата COUNT
         if (item.kind == SelectItem::Kind::Count)
         {
             if (item.countStar)
             {
-                object[name] = makeInt(static_cast<int>(rows.size()));
+                object[name] = makeInt(static_cast<int>(rows.size())); // COUNT(*) возвращает общий размер выборки
             }
             else
             {
-                std::size_t columnIndex = findColumnIndex(item.columnName);
-                int count = 0;
+                std::size_t columnIndex = findColumnIndex(item.columnName); // Поиск номера поля в схеме
+                int count = 0; // Инициализация локального счетчика живых значений
+                // Подсчет количества полей, не содержащих NULL
                 for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
                 {
                     if (rows[rowIndex][columnIndex].type != ValueType::Null)
                     {
-                        ++count;
+                        ++count; // Инкремент при наличии реальных данных
                     }
                 }
-                object[name] = makeInt(count);
+                object[name] = makeInt(count); // Запись вычисленного счетчика
             }
         }
+        // Вычисление математических агрегатов SUM и AVG
         else if (item.kind == SelectItem::Kind::Sum || item.kind == SelectItem::Kind::Avg)
         {
-            std::size_t columnIndex = findColumnIndex(item.columnName);
+            std::size_t columnIndex = findColumnIndex(item.columnName); // Нахождение столбца в схеме таблицы
+            // Ограничение: суммирование и среднее применимы исключительно к типу INT
             if (columns_[columnIndex].type != ColumnType::Int)
             {
-                throw std::runtime_error("SUM и AVG поддерживаются только для INT-столбцов");
+                throw std::runtime_error("SUM и AVG поддерживаются только для INT-столбцов"); // Ошибка бизнес-логики вычислений
             }
 
-            int sum = 0;
-            int count = 0;
+            int sum = 0; // Накопитель суммы значений
+            int count = 0; // Накопитель количества валидных числовых слагаемых
+            // Итеративный расчет базовых математических метрик по массиву строк
             for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
             {
                 if (rows[rowIndex][columnIndex].type == ValueType::Int)
                 {
-                    sum += rows[rowIndex][columnIndex].intValue;
-                    ++count;
+                    sum += rows[rowIndex][columnIndex].intValue; // Прибавление числового значения ячейки
+                    ++count; // Увеличение числа слагаемых
                 }
             }
 
+            // Формирование итогового ответа для математической суммы SUM
             if (item.kind == SelectItem::Kind::Sum)
             {
-                object[name] = makeInt(sum);
+                object[name] = makeInt(sum); // Фиксация итоговой суммы
             }
+            // Формирование ответа для среднего арифметического AVG с защитой от деления на ноль
             else
             {
-                if (count == 0) object[name] = makeNull();
-                else object[name] = makeInt(sum / count);
+                if (count == 0) object[name] = makeNull(); // Если строк нет — среднее значение не определено (NULL)
+                else object[name] = makeInt(sum / count); // Целочисленное деление для вычисления среднего
             }
         }
+        // Запрет на одновременный вывод сырых текстовых полей и сгруппированных агрегатов
         else
         {
-            throw std::runtime_error("нельзя смешивать обычные столбцы и агрегаты в этой простой реализации");
+            throw std::runtime_error("нельзя смешивать обычные столбцы и агрегаты в этой простой реализации"); // Ошибка структуры SELECT
         }
     }
 
-    std::vector<std::map<std::string, Value> > objects;
-    objects.push_back(object);
-    return objectsToJson(objects);
+    std::vector<std::map<std::string, Value> > objects; // Обертка в массив для совместимости с JSON-конвертером
+    objects.push_back(object); // Помещение единственного результирующего агрегатного объекта
+    return objectsToJson(objects); // Сериализация структуры в финальный JSON-текст
 }
 
-// Формирует обычный json
+// Формирование стандартного JSON-массива строк на основе результатов выборки
 std::string Table::makeRegularJson(const std::vector<Row>& rows, bool selectAll, const std::vector<SelectItem>& items) const
 {
-    std::vector<std::map<std::string, Value> > objects;
+    std::vector<std::map<std::string, Value> > objects; // Коллекция будущих JSON-объектов
 
+    // Трансформация каждой внутренней строки СУБД в ассоциативную структуру ключ-значение
     for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
     {
-        std::map<std::string, Value> object;
+        std::map<std::string, Value> object; // Картографическая модель текущей строки
 
+        // Сценарий А: Запрос SELECT * (вывод абсолютно всех полей таблицы)
         if (selectAll)
         {
             for (std::size_t columnIndex = 0; columnIndex < columns_.size(); ++columnIndex)
             {
-                object[columns_[columnIndex].name] = rows[rowIndex][columnIndex];
+                object[columns_[columnIndex].name] = rows[rowIndex][columnIndex]; // Маппинг оригинального имени и значения
             }
         }
+        // Сценарий Б: Выборочный вывод конкретно перечисленных столбцов
         else
         {
             for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex)
             {
-                const SelectItem& item = items[itemIndex];
+                const SelectItem& item = items[itemIndex]; // Ссылка на описание целевого поля выборки
+                // Повторная защитная проверка на отсутствие агрегатных функций в данном методе
                 if (item.kind != SelectItem::Kind::Column)
                 {
-                    throw std::runtime_error("агрегаты нельзя выводить как обычные строки");
+                    throw std::runtime_error("агрегаты нельзя выводить как обычные строки"); // Нарушение логики маршрутизации вызовов
                 }
 
-                std::size_t columnIndex = findColumnIndex(item.columnName);
-                std::string outputName = item.alias.has_value() ? item.alias.value() : item.columnName;
-                object[outputName] = rows[rowIndex][columnIndex];
+                std::size_t columnIndex = findColumnIndex(item.columnName); // Нахождение физической позиции поля
+                std::string outputName = item.alias.has_value() ? item.alias.value() : item.columnName; // Выбор имени (алиас или оригинал)
+                object[outputName] = rows[rowIndex][columnIndex]; // Запись ячейки в выходную структуру под выбранным именем
             }
         }
 
-        objects.push_back(object);
+        objects.push_back(object); // Помещение сформированного объекта строки в общий результирующий массив
     }
 
-    return objectsToJson(objects);
+    return objectsToJson(objects); // Вызов утилиты сериализации коллекции объектов в текстовый JSON-формат
 }
 
-// SELECT рядов с индексами/полным проходом
+// Основной метод выполнения SELECT: маршрутизирует выборку по индексам или полным проходом (Full Scan)
 SelectResult Table::selectRows(bool selectAll, const std::vector<SelectItem>& items, const std::optional<Expr>& condition) const
 {
-    std::vector<Row> rows;
-    bool usedIndex = false;
+    std::vector<Row> rows; // Коллекция строк, прошедших фильтрацию предикатами WHERE
+    bool usedIndex = false; // Локальный триггер успешности задействования B*-дерева
 
+    // Запрос на выборку обязан иметь спецификацию структуры вывода
     if (!selectAll && items.empty())
     {
-        throw std::runtime_error("SELECT должен содержать * или список столбцов");
+        throw std::runtime_error("SELECT должен содержать * или список столбцов"); // Ошибка пустого проектора полей
     }
 
+    // Предварительная валидация названий колонок в списке SELECT на их реальное существование
     if (!selectAll)
     {
         for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex)
         {
+            // Пропускаем проверку, если это общий системный подсчет COUNT(*)
             if (items[itemIndex].kind != SelectItem::Kind::Count || !items[itemIndex].countStar)
             {
                 if (!items[itemIndex].columnName.empty())
                 {
-                    findColumnIndex(items[itemIndex].columnName);
+                    findColumnIndex(items[itemIndex].columnName); // Проверка наличия поля в схеме (кидает ошибку, если нет)
                 }
             }
         }
     }
 
+    // Сценарий 1: Обработка запроса, содержащего блок условной фильтрации WHERE
     if (condition.has_value())
     {
-        validateCondition(condition.value());
+        validateCondition(condition.value()); // Аналитическая проверка типов внутри дерева условий
 
-        std::vector<std::streamoff> offsets;
+        std::vector<std::streamoff> offsets; // Буфер для хранения адресов строк от индексного менеджера
+        // Попытка применить B*-дерево для сужения круга поиска записей
         if (tryUseIndex(condition.value(), offsets))
         {
-            usedIndex = true;
-            rows = loadRowsByOffsets(offsets);
+            usedIndex = true; // Индекс успешно перехватил и ускорил выполнение запроса
+            rows = loadRowsByOffsets(offsets); // Точечная выгрузка с диска только потенциально подходящих строк
 
-            std::vector<Row> filtered;
+            std::vector<Row> filtered; // Контейнер для финишной фильтрации составных условий
+            // Дополнительная перепроверка строк (необходима при оптимизации сложных условий AND/OR)
             for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
             {
                 if (rowMatches(rows[rowIndex], condition.value()))
                 {
-                    filtered.push_back(rows[rowIndex]);
+                    filtered.push_back(rows[rowIndex]); // Сохранение строки, полностью прошедшей валидацию предикатом
                 }
             }
-            rows = filtered;
+            rows = filtered; // Обновление результирующего массива отфильтрованными данными
         }
+        // Худший сценарий: Индекс неприменим, выполняется линейный перебор всей таблицы (Full Table Scan)
         else
         {
-            std::vector<StoredRow> stored = loadAllRows();
+            std::vector<StoredRow> stored = loadAllRows(); // Последовательное считывание абсолютно всех живых строк с диска
+            // Построчное вычисление предиката WHERE для всего объема данных таблицы
             for (std::size_t rowIndex = 0; rowIndex < stored.size(); ++rowIndex)
             {
                 if (rowMatches(stored[rowIndex].row, condition.value()))
                 {
-                    rows.push_back(stored[rowIndex].row);
+                    rows.push_back(stored[rowIndex].row); // Фиксация строки при полном совпадении условий
                 }
             }
         }
     }
+    // Сценарий 2: Запрос без условий WHERE — безусловное чтение всех записей таблицы
     else
     {
-        std::vector<StoredRow> stored = loadAllRows();
+        std::vector<StoredRow> stored = loadAllRows(); // Прямая выгрузка всех строк из файла rows.dat
+        // Наполнение вектора результатов чистыми объектами Row без файловых смещений
         for (std::size_t rowIndex = 0; rowIndex < stored.size(); ++rowIndex)
         {
-            rows.push_back(stored[rowIndex].row);
+            rows.push_back(stored[rowIndex].row); // Извлечение строки данных
         }
     }
 
-    SelectResult result;
-    result.rowCount = rows.size();
-    result.usedIndex = usedIndex;
+    SelectResult result; // Формирование итоговой структуры ответа СУБД
+    result.rowCount = rows.size(); // Сохранение количества записей в ответе
+    result.usedIndex = usedIndex; // Фиксация диагностического флага использования индекса для профилирования
 
+    // Финальный этап: Преобразование отобранных структур данных в JSON формат в зависимости от режима
     if (!selectAll && itemsContainAggregates(items))
     {
-        result.json = makeAggregateJson(rows, items);
+        result.json = makeAggregateJson(rows, items); // Генерация сжатого JSON с результатами математических агрегатов
     }
     else
     {
-        result.json = makeRegularJson(rows, selectAll, items);
+        result.json = makeRegularJson(rows, selectAll, items); // Генерация плоского JSON со списком стандартных строк
     }
 
-    return result;
+    return result; // Возврат сформированного ответа на уровень диспетчеризации выполнения команд СУБД
 }
+
+

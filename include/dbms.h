@@ -25,13 +25,11 @@ class DBMS
 {
 public:
     explicit DBMS(const std::filesystem::path& rootPath);
-    void setLogPath(const std::filesystem::path& logPath);
 
     std::string execute(const Statement& statement);
 
 private:
     std::filesystem::path rootPath_;
-    std::filesystem::path logPath_;
     std::string currentDatabase_;
 
     std::filesystem::path databasePath(const std::string& databaseName) const;
@@ -46,5 +44,4 @@ private:
     std::string executeUpdate(const UpdateCommand& command);
     std::string executeDelete(const DeleteCommand& command);
     std::string executeSelect(const SelectCommand& command);
-    std::string executeRevert(const RevertCommand& command);
 };

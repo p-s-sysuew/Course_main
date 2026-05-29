@@ -120,7 +120,6 @@ struct UpdateAssignment { std::string columnName; Value value; };
 struct UpdateCommand { TableName table; std::vector<UpdateAssignment> assignments; Expr where; };
 struct DeleteCommand { TableName table; Expr where; };
 struct SelectCommand { TableName table; bool selectAll = false; std::vector<SelectItem> items; std::optional<Expr> where; };
-struct RevertCommand { std::optional<TableName> table; std::string timestamp; };
 
 // Общий тип команды
 using Statement = std::variant<
@@ -132,8 +131,7 @@ using Statement = std::variant<
     InsertCommand,
     UpdateCommand,
     DeleteCommand,
-    SelectCommand,
-    RevertCommand
+    SelectCommand
 >;
 
 using Row = std::vector<Value>;

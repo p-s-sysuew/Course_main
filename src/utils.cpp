@@ -7,7 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 
-// Удаление лишних пробелов 
+// Удаляет пробельные символы в начале и конце строки.
 std::string trim(const std::string& text)
 {
     std::size_t left = 0;
@@ -25,7 +25,7 @@ std::string trim(const std::string& text)
     return text.substr(left, right - left);
 }
 
-// Перевод строки в верхний регистр
+// Переводит всю строку в верхний регистр
 std::string toUpper(const std::string& text)
 {
     std::string result = text;
@@ -36,7 +36,7 @@ std::string toUpper(const std::string& text)
     return result;
 }
 
-// Валидация имён
+// Проверяет, является ли строка корректным идентификатором.
 bool isValidIdentifier(const std::string& text)
 {
     if (text.empty())
@@ -61,7 +61,7 @@ bool isValidIdentifier(const std::string& text)
     return true;
 }
 
-// Создание отсутствующей папки
+//Создаёт директорию (и все родительские), если она не существует
 void ensureDirectoryExists(const std::filesystem::path& path)
 {
     if (!std::filesystem::exists(path))
@@ -70,7 +70,7 @@ void ensureDirectoryExists(const std::filesystem::path& path)
     }
 }
 
-// Разделение строки по символу-разделителю
+// Разбивает строку по указанному символу-разделителю.
 std::vector<std::string> splitByChar(const std::string& text, char delimiter)
 {
     std::vector<std::string> parts;
@@ -93,42 +93,57 @@ std::vector<std::string> splitByChar(const std::string& text, char delimiter)
     return parts;
 }
 
-// Разбиение текста на команды
+/**
+ * Разбивает SQL-текст на отдельные команды.
+ * 
+ * Основные возможности:
+ * - Поддержка многострочных команд
+ * - Команды завершаются символом ';'
+ * - Корректная обработка строковых литералов в двойных кавычках ("...")
+ * - Учёт экранирования внутри строк (\", \n, \t и т.д.)
+ * - trim() каждой команды
+ */
 std::vector<std::string> splitStatements(const std::string& text)
 {
     std::vector<std::string> result;
-    std::string current;
-    bool inString = false;
-    bool escaped = false;
+    std::string current;           // Буфер для accumulating текущей команды
+    bool inString = false;         // Находимся ли мы внутри строкового литерала "..."
+    bool escaped = false;          // Был ли предыдущий символ '\'
 
     for (std::size_t index = 0; index < text.size(); ++index)
     {
         char ch = text[index];
         current.push_back(ch);
 
+        // Обработка символов внутри строки
         if (inString)
         {
             if (escaped)
             {
+                // Предыдущий символ был '\', текущий — экранированный
                 escaped = false;
             }
             else if (ch == '\\')
             {
+                // Начало экранированной последовательности
                 escaped = true;
             }
             else if (ch == '"')
             {
+                // Закрытие строки
                 inString = false;
             }
             continue;
         }
 
+        // Начало новой строки
         if (ch == '"')
         {
             inString = true;
             continue;
         }
 
+        // Завершение команды (только вне строкового литерала)
         if (ch == ';')
         {
             std::string statement = trim(current);
@@ -136,10 +151,11 @@ std::vector<std::string> splitStatements(const std::string& text)
             {
                 result.push_back(statement);
             }
-            current.clear();
+            current.clear();  // Начинаем новую команду
         }
     }
 
+    // Проверка: если после обработки остался незавершённый текст — ошибка
     if (!trim(current).empty())
     {
         throw std::runtime_error("Ошибка splitStatements: последняя команда не завершена символом ;");
@@ -148,7 +164,8 @@ std::vector<std::string> splitStatements(const std::string& text)
     return result;
 }
 
-// Считывание всего файла в строку
+
+// Читает содержимое всего файла в строку
 std::string readWholeFile(const std::filesystem::path& path)
 {
     std::ifstream input(path);
@@ -162,7 +179,7 @@ std::string readWholeFile(const std::filesystem::path& path)
     return out.str();
 }
 
-// Получение текущего времени строкой
+// Возвращает текущее локальное время в формате "YYYY-MM-DD HH:MM:SS"
 std::string nowText()
 {
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -170,15 +187,12 @@ std::string nowText()
     std::tm tmValue;
     localtime_r(&rawTime, &tmValue);
 
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-
     std::ostringstream out;
-    out << std::put_time(&tmValue, "%Y.%m.%d-%H:%M:%S");
-    out << '.' << std::setfill('0') << std::setw(3) << ms.count();
+    out << std::put_time(&tmValue, "%Y-%m-%d %H:%M:%S");
     return out.str();
 }
 
-// Обезопашивание строки для json
+// Экранирует специальные символы для безопасной вставки в JSON
 std::string escapeJsonString(const std::string& text)
 {
     std::string result;

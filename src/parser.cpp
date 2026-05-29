@@ -4,508 +4,502 @@
 
 #include <stdexcept>
 
+// Преобразует исходный текст SQL-запроса в структуру команды
 Statement Parser::parseStatement(const std::string& text) const
 {
-    std::string clean = trim(text);
+    std::string clean = trim(text); // Удаление начальных и конечных пробельных символов
     if (clean.empty())
     {
-        throw std::runtime_error("пустая команда");
+        throw std::runtime_error("Пустая команда"); // Ошибка при попытке распарсить пустую строку
     }
 
     if (!clean.empty() && clean.back() == ';')
     {
-        clean.pop_back();
+        clean.pop_back(); // Удаление финальной точки с запятой перед разбором
     }
 
-    Lexer lexer(clean);
-    Token first = lexer.next();
+    Lexer lexer(clean); // Инициализация лексера для разбиения текста на токены
+    Token first = lexer.next(); // Извлечение первого (определяющего) токена команды
 
     if (first.type != TokenType::Word)
     {
-        throw std::runtime_error("команда должна начинаться с ключевого слова");
+        throw std::runtime_error("Команда должна начинаться с ключевого слова"); // Защита от некорректного старта запроса
     }
 
-    std::string command = toUpper(first.text);
-    Statement statement;
+    std::string command = toUpper(first.text); // Приведение ключевого слова к верхнему регистру
+    Statement statement; // Переменная для хранения результирующей структуры команды
 
     if (command == "CREATE")
     {
-        Token second = lexer.next();
-        std::string next = toUpper(second.text);
-        if (next == "DATABASE") statement = CreateDatabaseCommand{parseIdentifier(lexer)};
-        else if (next == "TABLE") statement = parseCreateTable(lexer);
-        else throw std::runtime_error("неизвестная команда CREATE " + second.text);
+        
+        Token second = lexer.next(); // Получение типа создаваемой сущности
+        std::string next = toUpper(second.text); // Приведение типа сущности к верхнему регистру
+        if (next == "DATABASE") statement = CreateDatabaseCommand{parseIdentifier(lexer)}; // Разбор команды создания БД
+        else if (next == "TABLE") statement = parseCreateTable(lexer); // Разбор команды создания таблицы
+        else throw std::runtime_error("Неизвестная команда CREATE " + second.text); // Ошибка: создание не поддерживается
     }
     else if (command == "DROP")
     {
-        Token second = lexer.next();
-        std::string next = toUpper(second.text);
-        if (next == "DATABASE") statement = DropDatabaseCommand{parseIdentifier(lexer)};
-        else if (next == "TABLE") statement = DropTableCommand{parseTableName(lexer)};
-        else throw std::runtime_error("неизвестная команда DROP " + second.text);
+        Token second = lexer.next(); // Получение типа удаляемой сущности
+        std::string next = toUpper(second.text); // Приведение типа сущности к верхнему регистру
+        if (next == "DATABASE") statement = DropDatabaseCommand{parseIdentifier(lexer)}; // Разбор команды удаления БД
+        else if (next == "TABLE") statement = DropTableCommand{parseTableName(lexer)}; // Разбор команды удаления таблицы
+        else throw std::runtime_error("Неизвестная команда DROP " + second.text); // Ошибка: удаление не поддерживается
     }
     else if (command == "USE")
     {
-        statement = UseDatabaseCommand{parseIdentifier(lexer)};
+        statement = UseDatabaseCommand{parseIdentifier(lexer)}; // Разбор команды переключения контекста БД
     }
     else if (command == "INSERT")
     {
-        statement = parseInsert(lexer);
+        statement = parseInsert(lexer); // Вызов метода для разбора вставки записей
     }
     else if (command == "UPDATE")
     {
-        statement = parseUpdate(lexer);
+        statement = parseUpdate(lexer); // Вызов метода для разбора обновления записей
     }
     else if (command == "DELETE")
     {
-        statement = parseDelete(lexer);
+        statement = parseDelete(lexer); // Вызов метода для разбора удаления записей
     }
     else if (command == "SELECT")
     {
-        statement = parseSelect(lexer);
-    }
-    else if (command == "REVERT")
-    {
-        RevertCommand revert;
-        Token nextToken = lexer.peek();
-
-        // If next token is a word AND (no dots AND no dashes), it's likely a table name identifier.
-        // Timestamps usually contain '.' or '-'.
-        if (nextToken.type == TokenType::Word && nextToken.text.find('.') == std::string::npos && nextToken.text.find('-') == std::string::npos)
-        {
-             revert.table = parseTableName(lexer);
-        }
-
-        Token timestamp = lexer.next();
-        if (timestamp.type != TokenType::Word && timestamp.type != TokenType::Number && timestamp.type != TokenType::String)
-        {
-             throw std::runtime_error("ожидалась метка времени в REVERT (в кавычках или как слово/число)");
-        }
-        revert.timestamp = timestamp.text;
-        statement = revert;
+        statement = parseSelect(lexer); // Вызов метода для разбора выборки данных
     }
     else
     {
-        throw std::runtime_error("неизвестная команда: " + command);
+        throw std::runtime_error("Неизвестная команда: " + command); // Ошибка при передаче неподдерживаемого слова
     }
 
     if (!lexer.isEnd())
     {
-        throw std::runtime_error("лишний токен в конце команды: " + lexer.peek().text);
+        throw std::runtime_error("Лишний токен в конце команды: " + lexer.peek().text); // Ошибка наличия мусора после ';'
     }
 
-    return statement;
+    return statement; // Возврат сформированного объекта команды
 }
 
+// Валидация и извлечение имени сущности (идентификатора)
 std::string Parser::parseIdentifier(Lexer& lexer) const
 {
-    Token token = lexer.next();
+    Token token = lexer.next(); // Извлечение очередного токена из потока
 
     if (token.type != TokenType::Word)
     {
-        throw std::runtime_error("ожидался идентификатор, но получено '" + token.text + "'");
+        throw std::runtime_error("Ожидался идентификатор, но получено '" + token.text + "'"); // Ошибка: токен не является словом
     }
 
     if (!isValidIdentifier(token.text))
     {
-        throw std::runtime_error("некорректный идентификатор: " + token.text);
+        throw std::runtime_error("Некорректный идентификатор: " + token.text); // Ошибка: имя нарушает правила синтаксиса
     }
 
-    return token.text;
+    return token.text; // Возврат валидного имени сущности
 }
 
+// Разбор составного или простого имени таблицы (с опциональным указанием БД)
 TableName Parser::parseTableName(Lexer& lexer) const
 {
-    TableName result;
-    std::string first = parseIdentifier(lexer);
+    TableName result; // Объект для сохранения структуры имени
+    std::string first = parseIdentifier(lexer); // Считывание первого компонента имени
 
     if (lexer.consumeIf("."))
     {
-        result.databaseName = first;
-        result.tableName = parseIdentifier(lexer);
+        result.databaseName = first; // Первое слово было именем базы данных
+        result.tableName = parseIdentifier(lexer); // Второе слово является именем таблицы
     }
     else
     {
-        result.tableName = first;
+        result.tableName = first; // Имя базы опущено, считываем только имя таблицы
     }
 
-    return result;
+    return result; // Возврат составного имени
 }
 
+// Разбор константного литерала (число, строка или NULL)
 Value Parser::parseLiteral(Lexer& lexer) const
 {
-    Token token = lexer.next();
-
-    if (token.type == TokenType::String)
-    {
-        Value value;
-        value.type = ValueType::String;
-        value.stringValue = std::make_shared<std::string>(token.text);
-        return value;
-    }
+    Token token = lexer.next(); // Считывание токена значения
 
     if (token.type == TokenType::Number)
     {
-        Value value;
-        value.type = ValueType::Int;
-        value.intValue = std::atoi(token.text.c_str());
-        return value;
+        return makeInt(std::stoi(token.text)); // Конвертация и возврат целочисленного значения
     }
 
-    if (toUpper(token.text) == "NULL")
+    if (token.type == TokenType::String)
     {
-        Value value;
-        value.type = ValueType::Null;
-        return value;
+        return makeString(token.text); // Возврат строкового значения
     }
 
-    throw std::runtime_error("некорректный литерал: " + token.text);
+    if (token.type == TokenType::Word && toUpper(token.text) == "NULL")
+    {
+        return makeNull(); // Возврат инициализированного пустого значения
+    }
+
+    throw std::runtime_error("Ожидалась константа, но получено '" + token.text + "'"); // Ошибка: передан неподходящий токен
 }
 
+// Определение типа операнда (колонка или константный литерал) для выражений фильтрации
 Operand Parser::parseOperand(Lexer& lexer) const
 {
-    Token token = lexer.peek();
+    Token token = lexer.peek(); // Просмотр токена без извлечения из потока
+    Operand result; // Создание объекта операнда
 
-    if (token.type == TokenType::String || token.type == TokenType::Number || toUpper(token.text) == "NULL")
+    if (token.type == TokenType::Number || token.type == TokenType::String || (token.type == TokenType::Word && toUpper(token.text) == "NULL"))
     {
-        Operand result;
-        result.isColumn = false;
-        result.literalValue = parseLiteral(lexer);
-        return result;
+        result.isColumn = false; // Флаг: операнд является константой
+        result.literalValue = parseLiteral(lexer); // Извлечение и сохранение константы
+        return result; // Возврат операнда-литерала
     }
 
-    Operand result;
-    result.isColumn = true;
-    result.columnName = parseIdentifier(lexer);
-    return result;
+    if (token.type == TokenType::Word)
+    {
+        result.isColumn = true; // Флаг: операнд является именем столбца
+        result.columnName = parseIdentifier(lexer); // Разбор и сохранение имени колонки
+        return result; // Возврат операнда-колонки
+    }
+
+    throw std::runtime_error("Ожидался операнд в WHERE, но получено '" + token.text + "'"); // Ошибка: неподдерживаемый тип операнда
 }
 
+// Преобразование текстового токена в перечисление операторов сравнения
 CompareOp Parser::parseCompareOp(Lexer& lexer) const
 {
-    Token token = lexer.next();
+    Token token = lexer.next(); // Чтение токена оператора
 
-    if (token.text == "==") return CompareOp::Eq;
-    if (token.text == "!=") return CompareOp::NotEq;
-    if (token.text == "<") return CompareOp::Less;
-    if (token.text == "<=") return CompareOp::LessOrEq;
-    if (token.text == ">") return CompareOp::Greater;
-    if (token.text == ">=") return CompareOp::GreaterOrEq;
+    if (token.text == "==") return CompareOp::Eq; // Соответствие оператору "равно"
+    if (token.text == "!=") return CompareOp::NotEq; // Соответствие оператору "не равно"
+    if (token.text == "<") return CompareOp::Less; // Соответствие оператору "меньше"
+    if (token.text == "<=") return CompareOp::LessOrEq; // Соответствие оператору "меньше или равно"
+    if (token.text == ">") return CompareOp::Greater; // Соответствие оператору "больше"
+    if (token.text == ">=") return CompareOp::GreaterOrEq; // Соответствие оператору "больше или равно"
 
-    throw std::runtime_error("неизвестный оператор сравнения: " + token.text);
+    throw std::runtime_error("Ожидался оператор сравнения, но получено '" + token.text + "'"); // Ошибка: недопустимый знак сравнения
 }
 
+// Точка входа для парсинга логических условий секции WHERE
 Expr Parser::parseWhereExpression(Lexer& lexer) const
 {
-    return parseOrExpression(lexer);
+    return parseOrExpression(lexer); // Запуск разбора с наименьшего приоритета (логическое ИЛИ)
 }
 
+// Разбор цепочки условий, объединенных оператором OR
 Expr Parser::parseOrExpression(Lexer& lexer) const
 {
-    Expr left = parseAndExpression(lexer);
+    Expr left = parseAndExpression(lexer); // Разбор левого операнда с более высоким приоритетом (И)
 
-    while (toUpper(lexer.peek().text) == "OR")
+    while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "OR")
     {
-        lexer.next();
-        Expr result;
-        result.kind = Expr::Kind::Or;
-        result.first = std::make_shared<Expr>(left);
-        result.second = std::make_shared<Expr>(parseAndExpression(lexer));
-        left = result;
+        lexer.next(); // Извлечение токена "OR" из потока
+        Expr right = parseAndExpression(lexer); // Рекурсивный разбор правого выражения
+
+        Expr combined; // Создание узла дерева для объединения операций
+        combined.kind = Expr::Kind::Or; // Установка типа операции ИЛИ
+        combined.first = std::make_shared<Expr>(left); // Сохранение левой ветви дерева
+        combined.second = std::make_shared<Expr>(right); // Сохранение правой ветви дерева
+        left = combined; // Перенос объединенного дерева в левую часть для поддержки цепочки
     }
 
-    return left;
+    return left; // Возврат корня логического поддерева OR
 }
 
+// Разбор цепочки условий, объединенных оператором AND
 Expr Parser::parseAndExpression(Lexer& lexer) const
 {
-    Expr left = parsePrimaryExpression(lexer);
+    Expr left = parsePrimaryExpression(lexer); // Разбор базового предиката или выражения в скобках
 
-    while (toUpper(lexer.peek().text) == "AND")
+    while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "AND")
     {
-        lexer.next();
-        Expr result;
-        result.kind = Expr::Kind::And;
-        result.first = std::make_shared<Expr>(left);
-        result.second = std::make_shared<Expr>(parsePrimaryExpression(lexer));
-        left = result;
+        lexer.next(); // Извлечение токена "AND" из потока
+        Expr right = parsePrimaryExpression(lexer); // Считывание следующего связанного выражения
+
+        Expr combined; // Создание комбинированного узла дерева
+        combined.kind = Expr::Kind::And; // Установка типа операции И
+        combined.first = std::make_shared<Expr>(left); // Привязка левой части
+        combined.second = std::make_shared<Expr>(right); // Привязка правой части
+        left = combined; // Перенос узла для продолжения левоассоциативной цепочки
     }
 
-    return left;
+    return left; // Возврат корня логического поддерева AND
 }
 
+// Обработка выражений высшего приоритета (условия в круглых скобках)
 Expr Parser::parsePrimaryExpression(Lexer& lexer) const
 {
     if (lexer.consumeIf("("))
     {
-        Expr expr = parseOrExpression(lexer);
-        lexer.expect(")");
-        return expr;
+        Expr inside = parseWhereExpression(lexer); // Рекурсивный запуск разбора вложенного выражения
+        lexer.expect(")"); // Проверка наличия обязательной закрывающей скобки
+        return inside; // Возврат изолированного поддерева
     }
 
-    return parsePredicate(lexer);
+    return parsePredicate(lexer); // Если скобок нет, парсим стандартный одиночный предикат
 }
 
+// Разбор конкретного предиката сравнения, диапазона BETWEEN или шаблона LIKE
 Expr Parser::parsePredicate(Lexer& lexer) const
 {
-    Operand left = parseOperand(lexer);
-    Token next = lexer.peek();
-    std::string word = toUpper(next.text);
+    Operand left = parseOperand(lexer); // Считывание левой части выражения (переменная/константа)
 
-    if (word == "BETWEEN")
+    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "BETWEEN")
     {
-        lexer.next();
-        Expr expr;
-        expr.kind = Expr::Kind::Between;
-        expr.left = left;
-        expr.low = parseOperand(lexer);
-        lexer.expectWord("AND");
-        expr.high = parseOperand(lexer);
-        return expr;
+        lexer.next(); // Поглощение ключевого слова BETWEEN
+        Expr expr; // Создание выражения диапазона
+        expr.kind = Expr::Kind::Between; // Присвоение типа BETWEEN
+        expr.left = left; // Привязка проверяемого операнда
+        expr.low = parseOperand(lexer); // Парсинг нижней (включаемой) границы интервала
+        lexer.expectWord("AND"); // Обязательный разделитель границ диапазона
+        expr.high = parseOperand(lexer); // Парсинг верхней (исключаемой) границы интервала
+        return expr; // Возврат сформированного условия диапазона
     }
 
-    if (word == "LIKE")
+    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "LIKE")
     {
-        lexer.next();
-        Expr expr;
-        expr.kind = Expr::Kind::Like;
-        expr.left = left;
-        expr.pattern = parseOperand(lexer);
-        return expr;
+        lexer.next(); // Поглощение ключевого слова LIKE
+        Expr expr; // Создание выражения для работы с регулярными выражениями
+        expr.kind = Expr::Kind::Like; // Присвоение типа LIKE
+        expr.left = left; // Запись проверяемой строки
+        expr.pattern = parseOperand(lexer); // Парсинг шаблона или регулярного выражения
+        return expr; // Возврат условия поиска по регулярному выражению
     }
 
-    Expr expr;
-    expr.kind = Expr::Kind::Compare;
-    expr.left = left;
-    expr.compareOp = parseCompareOp(lexer);
-    expr.right = parseOperand(lexer);
-    return expr;
+    Expr expr; // Создание стандартного бинарного выражения сравнения
+    expr.kind = Expr::Kind::Compare; // Установка типа бинарного сравнения
+    expr.left = left; // Перенос левого операнда
+    expr.compareOp = parseCompareOp(lexer); // Выделение знака сравнения
+    expr.right = parseOperand(lexer); // Извлечение правого операнда
+    return expr; // Возврат базового условия сравнения
 }
 
+// Разбор синтаксиса команды создания таблицы и спецификаций её столбцов
 CreateTableCommand Parser::parseCreateTable(Lexer& lexer) const
 {
-    CreateTableCommand command;
-    command.tableName = parseIdentifier(lexer);
-    lexer.expect("(");
+    CreateTableCommand command; // Инициализация структуры команды
+    command.tableName = parseIdentifier(lexer); // Извлечение имени создаваемой таблицы
+    lexer.expect("("); // Проверка наличия открывающей скобки списка колонок
 
     while (true)
     {
-        ColumnInfo column;
-        column.name = parseIdentifier(lexer);
+        ColumnInfo column; // Создание структуры описания колонки
+        column.name = parseIdentifier(lexer); // Разбор имени столбца
+        column.type = parseColumnType(parseIdentifier(lexer)); // Парсинг типа данных (INT/STRING)
 
-        std::string typeName = toUpper(lexer.next().text);
-        if (typeName == "INT") column.type = ColumnType::Int;
-        else if (typeName == "STRING") column.type = ColumnType::String;
-        else throw std::runtime_error("неизвестный тип данных: " + typeName);
-
-        while (true)
+        while (lexer.peek().type == TokenType::Word)
         {
-            Token next = lexer.peek();
-            if (next.text == "," || next.text == ")")
-            {
-                break;
-            }
+            std::string word = toUpper(lexer.peek().text); // Чтение модификаторов столбца
 
-            std::string modifier = toUpper(lexer.next().text);
-            if (modifier == "NOT_NULL")
+            if (word == "NOT_NULL")
             {
-                column.notNull = true;
+                lexer.next(); // Поглощение модификатора NOT_NULL
+                column.notNull = true; // Установка запрета на хранение пустых значений
             }
-            else if (modifier == "INDEXED")
+            else if (word == "INDEXED")
             {
-                column.indexed = true;
+                lexer.next(); // Поглощение модификатора INDEXED
+                column.indexed = true; // Активация автосоздания B*-tree индекса
+                column.notNull = true; // Индексируемое поле неявно становится NOT_NULL
             }
-            else if (modifier == "DEFAULT")
+            else if (word == "DEFAULT")
             {
-                column.hasDefault = true;
-                column.defaultValue = parseLiteral(lexer);
+                lexer.next(); // Поглощение ключевого слова DEFAULT
+                column.hasDefault = true; // Фиксация наличия значения по умолчанию
+                column.defaultValue = parseLiteral(lexer); // Парсинг константы по умолчанию
             }
             else
             {
-                throw std::runtime_error("неизвестный модификатор столбца: " + modifier);
+                break; // Выход из цикла при обнаружении токена, не являющегося модификатором
             }
         }
 
-        command.columns.push_back(column);
+        command.columns.push_back(column); // Регистрация описанной колонки в схеме команды
 
         if (lexer.consumeIf(")"))
         {
-            break;
+            break; // Завершение разбора таблицы, если встречена закрывающая скобка
         }
 
-        lexer.expect(",");
+        lexer.expect(","); // Разделитель между описаниями разных столбцов
     }
 
-    return command;
+    return command; // Возврат укомплектованной команды CREATE TABLE
 }
 
-InsertCommand Parser::parseInsert(Lexer& lexer) const
-{
-    InsertCommand command;
-    lexer.expectWord("INTO");
-    command.table = parseTableName(lexer);
-
-    lexer.expect("(");
-    command.columns = parseIdentifierList(lexer);
-    lexer.expect(")");
-
-    lexer.expectWord("VALUE");
-    lexer.expect("(");
-    command.rows.push_back(parseLiteralRow(lexer));
-    lexer.expect(")");
-
-    while (lexer.consumeIf(","))
-    {
-        lexer.expect("(");
-        command.rows.push_back(parseLiteralRow(lexer));
-        lexer.expect(")");
-    }
-
-    return command;
-}
-
+// Считывание перечня идентификаторов, разделенных запятыми (например, списки полей)
 std::vector<std::string> Parser::parseIdentifierList(Lexer& lexer) const
 {
-    std::vector<std::string> result;
-    result.push_back(parseIdentifier(lexer));
+    std::vector<std::string> result; // Вектор для накопления имен
+    result.push_back(parseIdentifier(lexer)); // Извлечение обязательного первого имени
 
     while (lexer.consumeIf(","))
     {
-        result.push_back(parseIdentifier(lexer));
+        result.push_back(parseIdentifier(lexer)); // Добавление последующих имен через запятую
     }
 
-    return result;
+    return result; // Возврат сформированного списка
 }
 
+// Парсинг кортежа константных значений, обрамленного круглыми скобками (строка данных)
 std::vector<Value> Parser::parseLiteralRow(Lexer& lexer) const
 {
-    std::vector<Value> result;
-    result.push_back(parseLiteral(lexer));
+    std::vector<Value> row; // Буфер строки таблицы
+    lexer.expect("("); // Ожидание начала кортежа
+    row.push_back(parseLiteral(lexer)); // Извлечение первого значения
 
     while (lexer.consumeIf(","))
     {
-        result.push_back(parseLiteral(lexer));
+        row.push_back(parseLiteral(lexer)); // Извлечение элементов строки через запятую
     }
 
-    return result;
+    lexer.expect(")"); // Обязательное закрытие кортежа значений
+    return row; // Возврат распарсенного ряда данных
 }
 
+// Синтаксический анализ команды вставки записей (INSERT INTO)
+InsertCommand Parser::parseInsert(Lexer& lexer) const
+{
+    InsertCommand command; // Создание пустой структуры команды вставки
+    lexer.expectWord("INTO"); // Проверка обязательного синтаксического токена INTO
+    command.table = parseTableName(lexer); // Считывание целевой таблицы для вставки данных
+    lexer.expect("("); // Ожидание открывающей скобки перечня полей таблицы
+    command.columns = parseIdentifierList(lexer); // Чтение перечисляемых колонок
+    lexer.expect(")"); // Проверка закрывающей скобки списка колонок
+
+    if (lexer.peek().type != TokenType::Word)
+    {
+        throw std::runtime_error("В INSERT ожидалось VALUE или VALUES"); // Ошибка: отсутствует декларация значений
+    }
+
+    std::string word = toUpper(lexer.next().text); // Извлечение токена объявления блоков данных
+    if (word != "VALUE" && word != "VALUES")
+    {
+        throw std::runtime_error("В INSERT ожидалось VALUE или VALUES"); // Защита от синтаксических ошибок в названии ключевого слова
+    }
+
+    command.rows.push_back(parseLiteralRow(lexer)); // Извлечение обязательного первого блока данных
+    while (lexer.consumeIf(","))
+    {
+        command.rows.push_back(parseLiteralRow(lexer)); // Парсинг дополнительных строк при множественной вставке
+    }
+
+    return command; // Возврат укомплектованной команды INSERT
+}
+
+// Анализ команды модификации существующих записей (UPDATE)
 UpdateCommand Parser::parseUpdate(Lexer& lexer) const
 {
-    UpdateCommand command;
-    command.table = parseTableName(lexer);
-    lexer.expectWord("SET");
+    UpdateCommand command; // Инициализация структуры команды обновления
+    command.table = parseTableName(lexer); // Определение целевой таблицы
+    lexer.expectWord("SET"); // Валидация обязательного ключевого слова SET
 
     while (true)
     {
-        UpdateAssignment assignment;
-        assignment.columnName = parseIdentifier(lexer);
-        lexer.expect("=");
-        assignment.value = parseLiteral(lexer);
-        command.assignments.push_back(assignment);
+        UpdateAssignment assignment; // Локальный объект присваивания
+        assignment.columnName = parseIdentifier(lexer); // Чтение имени обновляемого поля
+        lexer.expect("="); // Проверка знака присваивания
+        assignment.value = parseLiteral(lexer); // Разбор нового устанавливаемого константного значения
+        command.assignments.push_back(assignment); // Регистрация операции присваивания в списке
 
-        if (toUpper(lexer.peek().text) == "WHERE" || lexer.isEnd())
+        if (!lexer.consumeIf(","))
         {
-            break;
+            break; // Прерывание цикла, если цепочка обновлений колонок завершена
         }
-
-        lexer.expect(",");
     }
 
-    if (lexer.consumeIf("WHERE"))
-    {
-        command.where = parseWhereExpression(lexer);
-    }
-
-    return command;
+    lexer.expectWord("WHERE"); // Каждая команда UPDATE обязана содержать условие фильтрации
+    command.where = parseWhereExpression(lexer); // Анализ и построение дерева условий WHERE
+    return command; // Возврат готовой команды модификации данных
 }
 
+// Анализ и разбор логики удаления строк (DELETE FROM)
 DeleteCommand Parser::parseDelete(Lexer& lexer) const
 {
-    DeleteCommand command;
-    lexer.expectWord("FROM");
-    command.table = parseTableName(lexer);
-
-    if (lexer.consumeIf("WHERE"))
-    {
-        command.where = parseWhereExpression(lexer);
-    }
-
-    return command;
+    DeleteCommand command; // Инициализация структуры команды удаления
+    lexer.expectWord("FROM"); // Проверка наличия обязательного слова FROM
+    command.table = parseTableName(lexer); // Извлечение имени целевой таблицы
+    lexer.expectWord("WHERE"); // Поля условий обязательны для выполнения DELETE
+    command.where = parseWhereExpression(lexer); // Разбор предикатов фильтрации удаляемых строк
+    return command; // Возврат заполненной структуры DELETE
 }
 
+// Разбор элемента выборки SELECT (конкретное поле или агрегатная функция с алиасом)
 SelectItem Parser::parseSelectItem(Lexer& lexer) const
 {
-    SelectItem item;
-    Token token = lexer.next();
-    std::string word = toUpper(token.text);
+    SelectItem item; // Инициализация возвращаемого элемента выборки
 
-    if (word == "COUNT" || word == "SUM" || word == "AVG")
+    if (lexer.peek().type == TokenType::Word)
     {
-        if (word == "COUNT") item.kind = SelectItem::Kind::Count;
-        if (word == "SUM") item.kind = SelectItem::Kind::Sum;
-        if (word == "AVG") item.kind = SelectItem::Kind::Avg;
+        std::string word = toUpper(lexer.peek().text); // Чтение и нормализация токена
 
-        lexer.expect("(");
-        if (item.kind == SelectItem::Kind::Count && lexer.consumeIf("*"))
+        if (word == "COUNT" || word == "SUM" || word == "AVG")
         {
-            item.countStar = true;
+            lexer.next(); // Извлечение имени агрегатной функции из потока
+            if (word == "COUNT") item.kind = SelectItem::Kind::Count; // Выбор режима подсчета количества
+            if (word == "SUM") item.kind = SelectItem::Kind::Sum; // Выбор режима подсчета суммы элементов
+            if (word == "AVG") item.kind = SelectItem::Kind::Avg; // Выбор режима вычисления среднего арифметического
+
+            lexer.expect("("); // Ожидание скобки аргумента агрегатора
+            if (item.kind == SelectItem::Kind::Count && lexer.consumeIf("*"))
+            {
+                item.countStar = true; // Специфичный флаг для синтаксиса COUNT(*)
+            }
+            else
+            {
+                item.columnName = parseIdentifier(lexer); // Парсинг конкретной колонки-аргумента для функции
+            }
+            lexer.expect(")"); // Валидация закрывающей скобки функции
         }
         else
         {
-            item.columnName = parseIdentifier(lexer);
+            item.kind = SelectItem::Kind::Column; // Элемент является обычной колонкой, а не функцией
+            item.columnName = parseIdentifier(lexer); // Чтение имени извлекаемого поля
         }
-        lexer.expect(")");
-    }
-    else if (token.type == TokenType::Word)
-    {
-        item.kind = SelectItem::Kind::Column;
-        item.columnName = token.text;
     }
     else
     {
-        throw std::runtime_error("ожидался столбец или агрегатная функция в SELECT");
+        throw std::runtime_error("Ожидался столбец или агрегатная функция в SELECT"); // Исключение: передан недопустимый токен
     }
 
     if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "AS")
     {
-        lexer.next();
-        item.alias = parseIdentifier(lexer);
+        lexer.next(); // Поглощение опционального токена алиаса "AS"
+        item.alias = parseIdentifier(lexer); // Считывание пользовательского псевдонима колонки
     }
 
-    return item;
+    return item; // Возврат описания элемента проекции SELECT
 }
 
+// Построение структуры команды выборки данных (SELECT)
 SelectCommand Parser::parseSelect(Lexer& lexer) const
 {
-    SelectCommand command;
+    SelectCommand command; // Создание пустого объекта команды SELECT
 
     if (lexer.consumeIf("*"))
     {
-        command.selectAll = true;
+        command.selectAll = true; // Включен флаг проекции всех доступных полей
     }
     else
     {
-        bool hasParentheses = lexer.consumeIf("(");
-        command.items.push_back(parseSelectItem(lexer));
+        bool hasParentheses = lexer.consumeIf("("); // Проверка наличия опциональной группировки полей в скобки
+        command.items.push_back(parseSelectItem(lexer)); // Разбор обязательного первого элемента проекции
 
         while (lexer.consumeIf(","))
         {
-            command.items.push_back(parseSelectItem(lexer));
+            command.items.push_back(parseSelectItem(lexer)); // Добавление дополнительных полей и агрегатов из списка
         }
 
         if (hasParentheses)
         {
-            lexer.expect(")");
+            lexer.expect(")"); // Контроль закрытия ранее обнаруженных скобок проекции
         }
     }
 
-    lexer.expectWord("FROM");
-    command.table = parseTableName(lexer);
+    lexer.expectWord("FROM"); // Проверка обязательного предложения FROM
+    command.table = parseTableName(lexer); // Определение таблицы-источника данных
 
     if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "WHERE")
     {
-        lexer.next();
-        command.where = parseWhereExpression(lexer);
+        lexer.next(); // Перешагивание через токен "WHERE"
+        command.where = parseWhereExpression(lexer); // Формирование и привязка дерева фильтрации строк
     }
 
     return command;

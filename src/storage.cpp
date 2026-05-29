@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <stdexcept>
 
-// Not in use.
+// Экранирование спецсимволов для текстового формата (не используется)
 std::string escapeStorageString(const std::string& text)
 {
     std::string result;
@@ -22,7 +22,7 @@ std::string escapeStorageString(const std::string& text)
     return result;
 }
 
-// Not in use.
+// Обратное разэкранирование спецсимволов в строке (не используется)
 std::string unescapeStorageString(const std::string& text)
 {
     std::string result;
@@ -54,7 +54,7 @@ std::string unescapeStorageString(const std::string& text)
     return result;
 }
 
-// Строки в length-prefix
+// Упаковка вектора строк в текстовый формат Length-Prefix
 std::string packFields(const std::vector<std::string>& fields)
 {
     std::string result;
@@ -67,7 +67,7 @@ std::string packFields(const std::vector<std::string>& fields)
     return result;
 }
 
-// length-prefix в строки
+// Распаковка строки формата Length-Prefix в вектор строк
 std::vector<std::string> unpackFields(const std::string& text)
 {
     std::vector<std::string> fields;
@@ -97,7 +97,7 @@ std::vector<std::string> unpackFields(const std::string& text)
     return fields;
 }
 
-// Перевод в protovalue
+// Конвертация внутреннего значения Value в формат Protobuf
 ProtoValue valueToProto(const Value& value)
 {
     ProtoValue proto;
@@ -120,7 +120,7 @@ ProtoValue valueToProto(const Value& value)
     return proto;
 }
 
-// Перевод из protovalue
+// Конвертация значения из Protobuf во внутренний тип Value с проверкой схемы
 Value valueFromProto(const ProtoValue& proto, ColumnType expectedType)
 {
     if (proto.kind() == ProtoValue::NULL_VALUE)
@@ -149,7 +149,7 @@ Value valueFromProto(const ProtoValue& proto, ColumnType expectedType)
     throw std::runtime_error("protobuf value: неизвестный тип значения");
 }
 
-// Перервод в protorow
+// Сериализация всей строки таблицы в бинарный Protobuf-формат
 std::string rowToProtoBytes(const Row& row)
 {
     ProtoRow proto;
@@ -166,7 +166,7 @@ std::string rowToProtoBytes(const Row& row)
     return bytes;
 }
 
-// Перевод из protorow
+// Десериализация строки таблицы из Protobuf с валидацией по схеме
 Row rowFromProtoBytes(const std::string& bytes, const std::vector<ColumnInfo>& columns)
 {
     ProtoRow proto;
@@ -177,7 +177,7 @@ Row rowFromProtoBytes(const std::string& bytes, const std::vector<ColumnInfo>& c
 
     if (static_cast<std::size_t>(proto.values_size()) != columns.size())
     {
-        throw std::runtime_error("количество ячеек в protobuf-строке не совпадает со схемой");
+        throw std::runtime_error("количество ячеек в protobuf-строке не совпадает со срезом");
     }
 
     Row row;
@@ -188,7 +188,7 @@ Row rowFromProtoBytes(const std::string& bytes, const std::vector<ColumnInfo>& c
     return row;
 }
 
-// Перевод в protocolumn
+// Маппинг внутреннего типа колонки в тип Protobuf
 static ProtoColumn::Type columnTypeToProto(ColumnType type)
 {
     if (type == ColumnType::Int)
@@ -198,7 +198,7 @@ static ProtoColumn::Type columnTypeToProto(ColumnType type)
     return ProtoColumn::STRING;
 }
 
-// Перевод из protocolumn
+// Маппинг типа колонки из Protobuf во внутренний тип
 static ColumnType columnTypeFromProto(ProtoColumn::Type type)
 {
     if (type == ProtoColumn::INT)
@@ -208,7 +208,7 @@ static ColumnType columnTypeFromProto(ProtoColumn::Type type)
     return ColumnType::String;
 }
 
-// Перевод в protoschema
+// Сериализация схемы таблицы (метаданных колонок) в Protobuf
 std::string schemaToProtoBytes(const std::vector<ColumnInfo>& columns)
 {
     ProtoSchema schema;
@@ -227,18 +227,18 @@ std::string schemaToProtoBytes(const std::vector<ColumnInfo>& columns)
     std::string bytes;
     if (!schema.SerializeToString(&bytes))
     {
-        throw std::runtime_error("не удалось сериализовать схему таблицы в protobuf");
+        throw std::runtime_error("Не удалось сериализовать схему таблицы в protobuf");
     }
     return bytes;
 }
 
-// Перевод из protoschema
+// Десериализация схемы таблицы из Protobuf-строки
 std::vector<ColumnInfo> schemaFromProtoBytes(const std::string& bytes)
 {
     ProtoSchema schema;
     if (!schema.ParseFromString(bytes))
     {
-        throw std::runtime_error("не удалось прочитать protobuf-схему таблицы");
+        throw std::runtime_error("Не удалось прочитать protobuf-схему таблицы");
     }
 
     std::vector<ColumnInfo> columns;
@@ -257,7 +257,7 @@ std::vector<ColumnInfo> schemaFromProtoBytes(const std::string& bytes)
     return columns;
 }
 
-// Перевод в ProtoIndexEntry
+// Сериализация элемента индекса (ключ и смещение) в Protobuf
 std::string indexEntryToProtoBytes(const Value& key, std::streamoff offset)
 {
     ProtoIndexEntry entry;
@@ -272,7 +272,7 @@ std::string indexEntryToProtoBytes(const Value& key, std::streamoff offset)
     return bytes;
 }
 
-// Перевод из ProtoIndexEntry
+// Десериализация элемента индекса из Protobuf-строки
 void indexEntryFromProtoBytes(const std::string& bytes, ColumnType type, Value& key, std::streamoff& offset)
 {
     ProtoIndexEntry entry;
@@ -285,8 +285,9 @@ void indexEntryFromProtoBytes(const std::string& bytes, ColumnType type, Value& 
     offset = static_cast<std::streamoff>(entry.offset());
 }
 
-// - - - Старые функции - - -
+// ================= Старые текстовые методы (для совместимости) =================
 
+// Текстовая сериализация ячейки данных с префиксом типа
 std::string serializeValue(const Value& value)
 {
     if (value.type == ValueType::Null) return "N";
@@ -296,6 +297,7 @@ std::string serializeValue(const Value& value)
     return "S:" + packFields(fields);
 }
 
+// Текстовая десериализация ячейки с валидацией ожидаемого типа
 Value deserializeValue(const std::string& text, ColumnType expectedType)
 {
     if (text == "N") return makeNull();
@@ -319,6 +321,7 @@ Value deserializeValue(const std::string& text, ColumnType expectedType)
     throw std::runtime_error("неизвестный префикс текстовой ячейки");
 }
 
+// Текстовая сериализация всей строки таблицы
 std::string serializeRow(const Row& row)
 {
     std::vector<std::string> fields;
@@ -329,6 +332,7 @@ std::string serializeRow(const Row& row)
     return "ROW:" + packFields(fields);
 }
 
+// Текстовая десериализация строки (поддерживает форматы ROW: и TSV)
 Row deserializeRow(const std::string& line, const std::vector<ColumnInfo>& columns)
 {
     std::vector<std::string> parts;
@@ -345,12 +349,14 @@ Row deserializeRow(const std::string& line, const std::vector<ColumnInfo>& colum
     return row;
 }
 
+// Сериализация значения по умолчанию для колонки
 std::string serializeDefault(const ColumnInfo& column)
 {
     if (!column.hasDefault) return "";
     return serializeValue(column.defaultValue);
 }
 
+// Парсинг параметров одной колонки из текстовой строки схемы
 ColumnInfo parseSchemaLine(const std::string& line)
 {
     std::vector<std::string> parts;
@@ -372,6 +378,7 @@ ColumnInfo parseSchemaLine(const std::string& line)
     return column;
 }
 
+// Формирование текстовой строки схемы для колонки
 std::string makeSchemaLine(const ColumnInfo& column)
 {
     std::vector<std::string> fields;
@@ -383,4 +390,3 @@ std::string makeSchemaLine(const ColumnInfo& column)
     fields.push_back(serializeDefault(column));
     return "SCH:" + packFields(fields);
 }
-

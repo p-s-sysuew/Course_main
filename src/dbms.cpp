@@ -1,273 +1,216 @@
 #include "dbms.h"
 #include "utils.h"
 #include "tablelocks.h"
-#include "securefile.h"
-#include "course_storage.pb.h"
 
 #include <stdexcept>
 #include <mutex>
-#include <iostream>
 
-// Существует ли база
+// Конструктор Database: инициализирует путь к базе и проверяет ее физическое существование
 Database::Database(const std::filesystem::path& path)
     : path_(path)
 {
+    // Если директория базы данных отсутствует на диске
     if (!std::filesystem::exists(path_))
     {
-        throw std::runtime_error("база данных не существует: " + path_.filename().string());
+        throw std::runtime_error("База данных не была создана (не существует): " + path_.filename().string()); // Ошибка отсутствия БД
     }
 }
 
-// Создание таблицы
+// Создание новой таблицы через вызов статического метода класса Table
 void Database::createTable(const std::string& tableName, const std::vector<ColumnInfo>& columns) const
 {
-    Table::create(path_, tableName, columns);
+    Table::create(path_, tableName, columns); // Делегирование создания структуры файлов таблицы
 }
 
-// Удаление таблицы
+// Удаление файлов таблицы с диска
 void Database::dropTable(const TableName& table) const
 {
-    Table::drop(path_, table.tableName);
+    Table::drop(path_, table.tableName); // Делегирование удаления файлов таблицы
 }
 
-// Открытие таблицы
+// Открытие существующей таблицы для последующей работы с ней
 Table Database::openTable(const TableName& table) const
 {
-    return Table(path_, table.tableName);
+    return Table(path_, table.tableName); // Возврат инициализированного объекта таблицы
 }
 
-// Создание субд
+// Конструктор СУБД: задает корневой каталог и создает его при необходимости
 DBMS::DBMS(const std::filesystem::path& rootPath)
     : rootPath_(rootPath)
 {
-    ensureDirectoryExists(rootPath_);
+    ensureDirectoryExists(rootPath_); // Гарантированное создание корневой папки СУБД на диске
 }
 
-void DBMS::setLogPath(const std::filesystem::path& logPath)
-{
-    logPath_ = logPath;
-}
-
-// Создание пути до бд
+// Формирование полного пути к директории конкретной базы данных
 std::filesystem::path DBMS::databasePath(const std::string& databaseName) const
 {
-    return rootPath_ / databaseName;
+    return rootPath_ / databaseName; // Конкатенация корневого пути и имени базы
 }
 
-// Определение имени бд
+// Определение целевой БД: из параметров запроса либо из текущего контекста USE
 std::string DBMS::resolveDatabaseName(const TableName& table) const
 {
+    // Если имя базы явно указано в запросе
     if (table.databaseName.has_value())
     {
-        return table.databaseName.value();
+        return table.databaseName.value(); // Возврат явно переданного имени БД
     }
 
+    // Если имя не указано и текущий контекст пуст
     if (currentDatabase_.empty())
     {
-        throw std::runtime_error("активная база данных не выбрана, используйте USE database_name");
+        throw std::runtime_error("активная база данных не выбрана, используйте USE database_name"); 
     }
 
-    return currentDatabase_;
+    return currentDatabase_; // Возврат имени активной в данный момент БД
 }
 
-// Существование необходимой бд
+// Вспомогательный метод для получения объекта БД на основе структуры имени таблицы
 Database DBMS::requireDatabaseFromTableName(const TableName& table) const
 {
-    return Database(databasePath(resolveDatabaseName(table)));
+    return Database(databasePath(resolveDatabaseName(table))); 
 }
 
-
-// Ключ таблицы, по которой создаётся мьютекс
+// Генерация уникальной строки-ключа для блокировки конкретной таблицы в многопоточной среде
 static std::string makeTableLockKey(const std::string& databaseName, const std::string& tableName)
 {
-    return databaseName + "." + tableName;
+    return databaseName + "." + tableName; // Формат ключа: "имя_бд.имя_таблицы"
 }
 
-// Определение нужного execute
+// Диспетчер команд: определяет тип инструкции и перенаправляет её на выполнение
 std::string DBMS::execute(const Statement& statement)
 {
-    if (std::holds_alternative<CreateDatabaseCommand>(statement)) return executeCreateDatabase(std::get<CreateDatabaseCommand>(statement));
-    if (std::holds_alternative<DropDatabaseCommand>(statement)) return executeDropDatabase(std::get<DropDatabaseCommand>(statement));
-    if (std::holds_alternative<UseDatabaseCommand>(statement)) return executeUseDatabase(std::get<UseDatabaseCommand>(statement));
-    if (std::holds_alternative<CreateTableCommand>(statement)) return executeCreateTable(std::get<CreateTableCommand>(statement));
-    if (std::holds_alternative<DropTableCommand>(statement)) return executeDropTable(std::get<DropTableCommand>(statement));
-    if (std::holds_alternative<InsertCommand>(statement)) return executeInsert(std::get<InsertCommand>(statement));
-    if (std::holds_alternative<UpdateCommand>(statement)) return executeUpdate(std::get<UpdateCommand>(statement));
-    if (std::holds_alternative<DeleteCommand>(statement)) return executeDelete(std::get<DeleteCommand>(statement));
-    if (std::holds_alternative<SelectCommand>(statement)) return executeSelect(std::get<SelectCommand>(statement));
-    if (std::holds_alternative<RevertCommand>(statement)) return executeRevert(std::get<RevertCommand>(statement));
-    throw std::runtime_error("неизвестный тип команды");
+    if (std::holds_alternative<CreateDatabaseCommand>(statement)) return executeCreateDatabase(std::get<CreateDatabaseCommand>(statement)); // Вызов CREATE DATABASE
+    if (std::holds_alternative<DropDatabaseCommand>(statement)) return executeDropDatabase(std::get<DropDatabaseCommand>(statement)); // Вызов DROP DATABASE
+    if (std::holds_alternative<UseDatabaseCommand>(statement)) return executeUseDatabase(std::get<UseDatabaseCommand>(statement)); // Вызов USE
+    if (std::holds_alternative<CreateTableCommand>(statement)) return executeCreateTable(std::get<CreateTableCommand>(statement)); // Вызов CREATE TABLE
+    if (std::holds_alternative<DropTableCommand>(statement)) return executeDropTable(std::get<DropTableCommand>(statement)); // Вызов DROP TABLE
+    if (std::holds_alternative<InsertCommand>(statement)) return executeInsert(std::get<InsertCommand>(statement)); // Вызов INSERT
+    if (std::holds_alternative<UpdateCommand>(statement)) return executeUpdate(std::get<UpdateCommand>(statement)); // Вызов UPDATE
+    if (std::holds_alternative<DeleteCommand>(statement)) return executeDelete(std::get<DeleteCommand>(statement)); // Вызов DELETE
+    return executeSelect(std::get<SelectCommand>(statement)); // Вызов SELECT по умолчанию для оставшегося типа
 }
 
-// Создание бд
+// Выполнение команды создания новой базы данных
 std::string DBMS::executeCreateDatabase(const CreateDatabaseCommand& command)
 {
-    std::lock_guard<std::mutex> lock(metadataMutex());
+    std::lock_guard<std::mutex> lock(metadataMutex()); // Синхронизация потоков при изменении метаданных СУБД
+    // Проверка имени базы данных на соответствие правилам идентификаторов
     if (!isValidIdentifier(command.databaseName))
     {
-        throw std::runtime_error("некорректное имя базы данных: " + command.databaseName);
+        throw std::runtime_error("Некорректное имя базы данных: " + command.databaseName); // Ошибка валидации имени
     }
 
-    std::filesystem::path path = databasePath(command.databaseName);
+    std::filesystem::path path = databasePath(command.databaseName); // Получение пути для новой папки БД
+    // Если папка с таким именем уже физически существует
     if (std::filesystem::exists(path))
     {
-        throw std::runtime_error("база данных уже существует: " + command.databaseName);
+        throw std::runtime_error("База данных уже существует: " + command.databaseName); // Ошибка дублирования БД
     }
 
-    std::filesystem::create_directories(path);
-    return "OK: база данных создана: " + command.databaseName;
+    std::filesystem::create_directories(path); // Создание директории для файлов новой БД
+    return "\033[32m✓\033[0m База данных успешно создана: " + command.databaseName; // Возврат успешного статуса операции
 }
 
-// Удаление бд
+// Выполнение команды удаления базы данных со всем содержимым
 std::string DBMS::executeDropDatabase(const DropDatabaseCommand& command)
 {
-    std::lock_guard<std::mutex> lock(metadataMutex());
-    std::filesystem::path path = databasePath(command.databaseName);
+    std::lock_guard<std::mutex> lock(metadataMutex()); // Блокировка метаданных СУБД на время удаления
+    std::filesystem::path path = databasePath(command.databaseName); // Получение пути к удаляемой папке БД
+    // Если директория базы данных не найдена
     if (!std::filesystem::exists(path))
     {
-        throw std::runtime_error("база данных не существует: " + command.databaseName);
+        throw std::runtime_error("База данных не существует: " + command.databaseName); // Ошибка удаления отсутствующей БД
     }
 
-    std::filesystem::remove_all(path);
+    std::filesystem::remove_all(path); // Рекурсивное физическое удаление папки со всеми таблицами
+    // Если удалена база данных, выбранная в текущий момент как активная
     if (currentDatabase_ == command.databaseName)
     {
-        currentDatabase_.clear();
+        currentDatabase_.clear(); // Сброс контекста активной базы данных
     }
 
-    return "OK: база данных удалена: " + command.databaseName;
+    return "\033[32m✓\033[0m База данных успешно удалена: " + command.databaseName; // Возврат статуса об успешном удалении
 }
 
-// Выбор бд
+// Выполнение команды USE для переключения контекста на указанную БД
 std::string DBMS::executeUseDatabase(const UseDatabaseCommand& command)
 {
-    std::lock_guard<std::mutex> lock(metadataMutex());
+    std::lock_guard<std::mutex> lock(metadataMutex()); // Потокобезопасный доступ к изменению метаданных сессии
+    // Проверка физического существования папки переключаемой БД
     if (!std::filesystem::exists(databasePath(command.databaseName)))
     {
-        throw std::runtime_error("база данных не существует: " + command.databaseName);
+        throw std::runtime_error("База данных не существует: " + command.databaseName); 
     }
 
-    currentDatabase_ = command.databaseName;
-    return "OK: выбрана база данных: " + currentDatabase_;
+    currentDatabase_ = command.databaseName; // Фиксация нового имени активной базы данных в СУБД
+    return "\033[32m✓\033[0m Выбрана база данных: " + currentDatabase_; // Подтверждение успешного переключения контекста
 }
 
-// Создание таблицы в бд
+// Выполнение команды создания таблицы в активной базе данных
 std::string DBMS::executeCreateTable(const CreateTableCommand& command)
 {
+    // Проверка наличия выбранной БД перед созданием таблицы
     if (currentDatabase_.empty())
     {
-        throw std::runtime_error("CREATE TABLE требует выбранную базу данных, используйте USE");
+        throw std::runtime_error("CREATE TABLE требует выбранную базу данных, используйте USE"); // Ошибка контекста
     }
 
-    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(currentDatabase_, command.tableName)));
-    Database database(databasePath(currentDatabase_));
-    database.createTable(command.tableName, command.columns);
-    return "OK: таблица создана: " + command.tableName;
+    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(currentDatabase_, command.tableName))); // Блокировка целевой таблицы
+    Database database(databasePath(currentDatabase_)); // Инициализация объекта текущей БД
+    database.createTable(command.tableName, command.columns); // Создание схемы и файлов новой таблицы
+    return "\033[32m✓\033[0m Таблица успешно создана: " + command.tableName; // Подтверждение успешного создания таблицы
 }
 
-// Удаление таблицы в бд
+// Выполнение команды удаления таблицы
 std::string DBMS::executeDropTable(const DropTableCommand& command)
 {
-    std::string databaseName = resolveDatabaseName(command.table);
-    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName)));
-    Database database(databasePath(databaseName));
-    database.dropTable(command.table);
-    return "OK: таблица удалена: " + command.table.tableName;
+    std::string databaseName = resolveDatabaseName(command.table); // Вычисление имени БД для таблицы
+    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName))); // Эксклюзивная блокировка таблицы
+    Database database(databasePath(databaseName)); // Инициализация объекта целевой БД
+    database.dropTable(command.table); // Удаление таблицы из структуры базы данных
+    return "\033[32m✓\033[0m Таблица успешно удалена: " + command.table.tableName; // Подтверждение успешного удаления таблицы
 }
 
-// Добавление строк в таблицу в бд
+// Выполнение команды вставки новых записей в таблицу
 std::string DBMS::executeInsert(const InsertCommand& command)
 {
-    std::string databaseName = resolveDatabaseName(command.table);
-    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName)));
-    Database database(databasePath(databaseName));
-    Table table = database.openTable(command.table);
-    std::size_t count = table.insertRows(command.columns, command.rows);
-    return "OK: вставлено строк: " + std::to_string(count);
+    std::string databaseName = resolveDatabaseName(command.table); // Вычисление имени БД для вставки
+    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName))); // Блокировка на запись
+    Database database(databasePath(databaseName)); // Открытие целевой БД
+    Table table = database.openTable(command.table); // Открытие файлов целевой таблицы
+    std::size_t count = table.insertRows(command.columns, command.rows); // Выполнение операции вставки и подсчет строк
+    return "\033[32m✓\033[0m Вставлено строк: " + std::to_string(count); // Возврат отчета о количестве добавленных записей
 }
 
-// Изменение строк в таблице в бд
+// Выполнение команды обновления (модификации) существующих строк по условию
 std::string DBMS::executeUpdate(const UpdateCommand& command)
 {
-    std::string databaseName = resolveDatabaseName(command.table);
-    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName)));
-    Database database(databasePath(databaseName));
-    Table table = database.openTable(command.table);
-    std::size_t count = table.updateRows(command.assignments, command.where);
-    return "OK: обновлено строк: " + std::to_string(count);
+    std::string databaseName = resolveDatabaseName(command.table); // Вычисление имени БД
+    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName))); // Блокировка таблицы на изменение
+    Database database(databasePath(databaseName)); // Открытие БД
+    Table table = database.openTable(command.table); // Открытие таблицы
+    std::size_t count = table.updateRows(command.assignments, command.where); // Модификация данных и возврат счетчика строк
+    return "\033[32m✓\033[0m Обновлено строк: " + std::to_string(count); // Возврат отчета о количестве измененных записей
 }
 
-// Удаление строк в таблице в бд
+// Выполнение команды удаления строк, соответствующих условию WHERE
 std::string DBMS::executeDelete(const DeleteCommand& command)
 {
-    std::string databaseName = resolveDatabaseName(command.table);
-    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName)));
-    Database database(databasePath(databaseName));
-    Table table = database.openTable(command.table);
-    std::size_t count = table.deleteRows(command.where);
-    return "OK: удалено строк: " + std::to_string(count);
+    std::string databaseName = resolveDatabaseName(command.table); // Вычисление родительской БД
+    std::lock_guard<std::mutex> lock(tableMutexForKey(makeTableLockKey(databaseName, command.table.tableName))); // Блокировка таблицы на удаление
+    Database database(databasePath(databaseName)); // Открытие БД
+    Table table = database.openTable(command.table); // Открытие таблицы
+    std::size_t count = table.deleteRows(command.where); // Удаление записей с диска и возврат количества строк
+    return "\033[32m✓\033[0m. Удалено строк: " + std::to_string(count); // Возврат отчета о количестве удаленных записей
 }
 
-// Чтение строк в таблице в бд
+// Выполнение команды выборки (поиска) данных из таблицы
 std::string DBMS::executeSelect(const SelectCommand& command)
 {
-    std::string databaseName = resolveDatabaseName(command.table);
-    Database database(databasePath(databaseName));
-    Table table = database.openTable(command.table);
-    SelectResult result = table.selectRows(command.selectAll, command.items, command.where);
-    return result.json;
-}
-
-std::string DBMS::executeRevert(const RevertCommand& command)
-{
-    if (logPath_.empty())
-    {
-        throw std::runtime_error("REVERT: путь к логам не задан");
-    }
-
-    if (!std::filesystem::exists(logPath_))
-    {
-        throw std::runtime_error("REVERT: файл логов не найден");
-    }
-
-    std::vector<std::string> records = readSecureRecords(logPath_);
-    std::vector<std::string> commandsToReplay;
-
-    for (const auto& record : records)
-    {
-        ProtoLogEntry entry;
-        if (!entry.ParseFromString(record)) continue;
-        if (entry.status() != "OK") continue;
-        if (entry.start_time() > command.timestamp) break;
-
-        std::string sql = entry.query_text();
-        std::string upperSql = toUpper(trim(sql));
-        if (upperSql.find("REVERT") == 0) continue;
-        if (upperSql.find("SELECT") == 0) continue;
-
-        commandsToReplay.push_back(sql);
-    }
-
-    // Full system revert: wipe everything but auth/system data
-    for (const auto& entry : std::filesystem::directory_iterator(rootPath_))
-    {
-        if (entry.path().filename() != "_system" && entry.path().filename() != "users.pb")
-        {
-            std::filesystem::remove_all(entry.path());
-        }
-    }
-
-    Parser parser;
-    currentDatabase_.clear();
-
-    for (const auto& sql : commandsToReplay)
-    {
-        try {
-            Statement stmt = parser.parseStatement(sql);
-            execute(stmt);
-        } catch (const std::exception& e) {
-             std::cerr << "REVERT replay warning: " << e.what() << " in SQL: " << sql << std::endl;
-        }
-    }
-
-    return "OK: состояние базы данных откачено к " + command.timestamp;
+    std::string databaseName = resolveDatabaseName(command.table); // Определение имени целевой БД
+    Database database(databasePath(databaseName)); // Открытие БД (чтение допускает параллельный доступ без блокировки)
+    Table table = database.openTable(command.table); // Открытие таблицы для сканирования
+    SelectResult result = table.selectRows(command.selectAll, command.items, command.where); // Извлечение данных и формирование результата
+    return result.json; // Возврат итоговой выборки в формате строки JSON
 }
