@@ -1,4 +1,5 @@
 #include "dbms.h"
+#include "tablelocks.h"
 #include "utils.h"
 
 #include <algorithm>
