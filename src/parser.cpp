@@ -66,6 +66,10 @@ Statement Parser::parseStatement(const std::string& text) const
     {
         statement = parseSelect(lexer); // Вызов метода для разбора выборки данных
     }
+    else if (command == "REGISTER")
+    {
+        statement = parseRegister(lexer);
+    }
     else
     {
         throw std::runtime_error("Неизвестная команда: " + command); // Ошибка при передаче неподдерживаемого слова
@@ -500,6 +504,41 @@ SelectCommand Parser::parseSelect(Lexer& lexer) const
     {
         lexer.next(); // Перешагивание через токен "WHERE"
         command.where = parseWhereExpression(lexer); // Формирование и привязка дерева фильтрации строк
+    }
+
+    return command;
+}
+// Разбор команды регистрации пользователя: REGISTER USER 'name' PASSWORD 'pass' [ROLE 'role']
+RegisterUserCommand Parser::parseRegister(Lexer& lexer) const
+{
+    RegisterUserCommand command;
+    lexer.expectWord("USER");
+
+    // Поддержка как идентификаторов, так и строк для имени и пароля
+    Token nameToken = lexer.next();
+    if (nameToken.type != TokenType::Word && nameToken.type != TokenType::String)
+    {
+        throw std::runtime_error("Ожидалось имя пользователя (слово или строка)");
+    }
+    command.username = nameToken.text;
+
+    lexer.expectWord("PASSWORD");
+    Token passToken = lexer.next();
+    if (passToken.type != TokenType::Word && passToken.type != TokenType::String)
+    {
+        throw std::runtime_error("Ожидался пароль (слово или строка)");
+    }
+    command.password = passToken.text;
+
+    if (!lexer.isEnd() && lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "ROLE")
+    {
+        lexer.next(); // ROLE
+        Token roleToken = lexer.next();
+        if (roleToken.type != TokenType::Word && roleToken.type != TokenType::String)
+        {
+            throw std::runtime_error("Ожидалась роль (слово или строка)");
+        }
+        command.role = roleToken.text;
     }
 
     return command;

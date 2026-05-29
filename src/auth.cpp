@@ -503,18 +503,21 @@ bool AuthManager::canExecute(const std::string& role, const Statement& statement
 {
     if (role == "admin")
     {
+        if (std::holds_alternative<RegisterUserCommand>(statement)) return true;
         return true;
     }
 
     if (role == "reader")
     {
-        return std::holds_alternative<UseDatabaseCommand>(statement) ||
+        if (std::holds_alternative<RegisterUserCommand>(statement)) return true;
+               return std::holds_alternative<UseDatabaseCommand>(statement) ||
                std::holds_alternative<SelectCommand>(statement);
     }
 
     if (role == "writer")
     {
-        return std::holds_alternative<UseDatabaseCommand>(statement) ||
+        if (std::holds_alternative<RegisterUserCommand>(statement)) return true;
+               return std::holds_alternative<UseDatabaseCommand>(statement) ||
                std::holds_alternative<SelectCommand>(statement) ||
                std::holds_alternative<InsertCommand>(statement) ||
                std::holds_alternative<UpdateCommand>(statement) ||
