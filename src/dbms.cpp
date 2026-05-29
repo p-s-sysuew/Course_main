@@ -1,40 +1,11 @@
 #include "dbms.h"
-#include "utils.h"
 #include "tablelocks.h"
+#include "utils.h"
 
-#include <stdexcept>
+#include <filesystem>
 #include <mutex>
+#include <stdexcept>
 
-// Конструктор Database: инициализирует путь к базе и проверяет ее физическое существование
-Database::Database(const std::filesystem::path& path)
-    : path_(path)
-{
-    // Если директория базы данных отсутствует на диске
-    if (!std::filesystem::exists(path_))
-    {
-        throw std::runtime_error("База данных не была создана (не существует): " + path_.filename().string()); // Ошибка отсутствия БД
-    }
-}
-
-// Создание новой таблицы через вызов статического метода класса Table
-void Database::createTable(const std::string& tableName, const std::vector<ColumnInfo>& columns) const
-{
-    Table::create(path_, tableName, columns); // Делегирование создания структуры файлов таблицы
-}
-
-// Удаление файлов таблицы с диска
-void Database::dropTable(const TableName& table) const
-{
-    Table::drop(path_, table.tableName); // Делегирование удаления файлов таблицы
-}
-
-// Открытие существующей таблицы для последующей работы с ней
-Table Database::openTable(const TableName& table) const
-{
-    return Table(path_, table.tableName); // Возврат инициализированного объекта таблицы
-}
-
-// Конструктор СУБД: задает корневой каталог и создает его при необходимости
 DBMS::DBMS(const std::filesystem::path& rootPath)
     : rootPath_(rootPath)
 {
@@ -88,7 +59,14 @@ std::string DBMS::execute(const Statement& statement)
     if (std::holds_alternative<InsertCommand>(statement)) return executeInsert(std::get<InsertCommand>(statement)); // Вызов INSERT
     if (std::holds_alternative<UpdateCommand>(statement)) return executeUpdate(std::get<UpdateCommand>(statement)); // Вызов UPDATE
     if (std::holds_alternative<DeleteCommand>(statement)) return executeDelete(std::get<DeleteCommand>(statement)); // Вызов DELETE
-    return executeSelect(std::get<SelectCommand>(statement)); // Вызов SELECT по умолчанию для оставшегося типа
+    if (std::holds_alternative<SelectCommand>(statement)) return executeSelect(std::get<SelectCommand>(statement)); // Вызов SELECT
+
+    if (std::holds_alternative<RegisterUserCommand>(statement))
+    {
+        throw std::runtime_error("Команда REGISTER не может быть выполнена напрямую через ядро БД");
+    }
+
+    throw std::runtime_error("Неизвестный тип команды в DBMS");
 }
 
 // Выполнение команды создания новой базы данных
@@ -214,3 +192,6 @@ std::string DBMS::executeSelect(const SelectCommand& command)
     SelectResult result = table.selectRows(command.selectAll, command.items, command.where); // Извлечение данных и формирование результата
     return result.json; // Возврат итоговой выборки в формате строки JSON
 }
+
+Database::Database(const std::filesystem::path& path) : path_(path) {}
+// Note: Other Database methods are likely in storage.cpp or table.cpp based on the earlier ls

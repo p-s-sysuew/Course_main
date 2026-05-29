@@ -66,6 +66,10 @@ Statement Parser::parseStatement(const std::string& text) const
     {
         statement = parseSelect(lexer); // Вызов метода для разбора выборки данных
     }
+    else if (command == "REGISTER")
+    {
+        statement = parseRegister(lexer);
+    }
     else
     {
         throw std::runtime_error("Неизвестная команда: " + command); // Ошибка при передаче неподдерживаемого слова
@@ -100,23 +104,19 @@ std::string Parser::parseIdentifier(Lexer& lexer) const
 // Разбор составного или простого имени таблицы (с опциональным указанием БД)
 TableName Parser::parseTableName(Lexer& lexer) const
 {
-    TableName result; // Объект для сохранения структуры имени
     std::string first = parseIdentifier(lexer); // Считывание первого компонента имени
 
     if (lexer.consumeIf("."))
     {
-        result.databaseName = first; // Первое слово было именем базы данных
-        result.tableName = parseIdentifier(lexer); // Второе слово является именем таблицы
-    }
-    else
-    {
-        result.tableName = first; // Имя базы опущено, считываем только имя таблицы
+        // Если встречена точка, значит имя вида "база.таблица"
+        return TableName{first, parseIdentifier(lexer)};
     }
 
-    return result; // Возврат составного имени
+    // В противном случае возвращаем только имя таблицы без привязки к базе
+    return TableName{std::nullopt, first};
 }
 
-// Разбор константного литерала (число, строка или NULL)
+// Разбор одиночного значения (литерала): числа, строки или NULL
 Value Parser::parseLiteral(Lexer& lexer) const
 {
     Token token = lexer.next(); // Считывание токена значения
@@ -139,132 +139,103 @@ Value Parser::parseLiteral(Lexer& lexer) const
     throw std::runtime_error("Ожидалась константа, но получено '" + token.text + "'"); // Ошибка: передан неподходящий токен
 }
 
-// Определение типа операнда (колонка или константный литерал) для выражений фильтрации
+// Определение типа колонки по его строковому представлению
+static ColumnType parseColumnType(const std::string& type)
+{
+    std::string upper = toUpper(type); // Нормализация к верхнему регистру
+    if (upper == "INT") return ColumnType::Int; // Тип целого числа
+    if (upper == "STRING") return ColumnType::String; // Тип текстовой строки
+    throw std::runtime_error("Неизвестный тип данных: " + type); // Ошибка: неподдерживаемый тип
+}
+
+// Разбор операнда (имя колонки или константа) для выражений WHERE
 Operand Parser::parseOperand(Lexer& lexer) const
 {
-    Token token = lexer.peek(); // Просмотр токена без извлечения из потока
-    Operand result; // Создание объекта операнда
+    Token token = lexer.peek(); // Просмотр следующего токена без извлечения
 
-    if (token.type == TokenType::Number || token.type == TokenType::String || (token.type == TokenType::Word && toUpper(token.text) == "NULL"))
+    if (token.type == TokenType::Word && toUpper(token.text) != "NULL")
     {
-        result.isColumn = false; // Флаг: операнд является константой
-        result.literalValue = parseLiteral(lexer); // Извлечение и сохранение константы
-        return result; // Возврат операнда-литерала
+        return Operand{true, parseIdentifier(lexer), {}}; // Трактовка токена как имени столбца
     }
 
-    if (token.type == TokenType::Word)
-    {
-        result.isColumn = true; // Флаг: операнд является именем столбца
-        result.columnName = parseIdentifier(lexer); // Разбор и сохранение имени колонки
-        return result; // Возврат операнда-колонки
-    }
-
-    throw std::runtime_error("Ожидался операнд в WHERE, но получено '" + token.text + "'"); // Ошибка: неподдерживаемый тип операнда
+    return Operand{false, "", parseLiteral(lexer)}; // Трактовка токена как литерала (константы)
 }
 
-// Преобразование текстового токена в перечисление операторов сравнения
+// Преобразование строкового символа операции в перечисление CompareOp
 CompareOp Parser::parseCompareOp(Lexer& lexer) const
 {
-    Token token = lexer.next(); // Чтение токена оператора
-
-    if (token.text == "==") return CompareOp::Eq; // Соответствие оператору "равно"
-    if (token.text == "!=") return CompareOp::NotEq; // Соответствие оператору "не равно"
-    if (token.text == "<") return CompareOp::Less; // Соответствие оператору "меньше"
-    if (token.text == "<=") return CompareOp::LessOrEq; // Соответствие оператору "меньше или равно"
-    if (token.text == ">") return CompareOp::Greater; // Соответствие оператору "больше"
-    if (token.text == ">=") return CompareOp::GreaterOrEq; // Соответствие оператору "больше или равно"
-
-    throw std::runtime_error("Ожидался оператор сравнения, но получено '" + token.text + "'"); // Ошибка: недопустимый знак сравнения
+    Token token = lexer.next(); // Получение токена оператора
+    if (token.text == "=") return CompareOp::Eq; // Равно
+    if (token.text == "!=") return CompareOp::NotEq; // Не равно
+    if (token.text == "<") return CompareOp::Less; // Меньше
+    if (token.text == "<=") return CompareOp::LessOrEq; // Меньше или равно
+    if (token.text == ">") return CompareOp::Greater; // Больше
+    if (token.text == ">=") return CompareOp::GreaterOrEq; // Больше или равно
+    throw std::runtime_error("Неизвестный оператор сравнения: " + token.text); // Ошибка: некорректный знак
 }
 
-// Точка входа для парсинга логических условий секции WHERE
+// Анализ предложений фильтрации (точка входа в парсинг выражений WHERE)
 Expr Parser::parseWhereExpression(Lexer& lexer) const
 {
-    return parseOrExpression(lexer); // Запуск разбора с наименьшего приоритета (логическое ИЛИ)
+    return parseOrExpression(lexer); // Переход к обработке самого низкого приоритета (OR)
 }
 
-// Разбор цепочки условий, объединенных оператором OR
+// Разбор цепочки логических ИЛИ (OR)
 Expr Parser::parseOrExpression(Lexer& lexer) const
 {
-    Expr left = parseAndExpression(lexer); // Разбор левого операнда с более высоким приоритетом (И)
+    Expr left = parseAndExpression(lexer); // Рекурсивный спуск к AND
 
     while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "OR")
     {
-        lexer.next(); // Извлечение токена "OR" из потока
-        Expr right = parseAndExpression(lexer); // Рекурсивный разбор правого выражения
-
-        Expr combined; // Создание узла дерева для объединения операций
-        combined.kind = Expr::Kind::Or; // Установка типа операции ИЛИ
-        combined.first = std::make_shared<Expr>(left); // Сохранение левой ветви дерева
-        combined.second = std::make_shared<Expr>(right); // Сохранение правой ветви дерева
-        left = combined; // Перенос объединенного дерева в левую часть для поддержки цепочки
+        lexer.next(); // Поглощение "OR"
+        Expr expr;
+        expr.kind = Expr::Kind::Or; // Установка типа узла ИЛИ
+        expr.first = std::make_shared<Expr>(left); // Левая ветвь дерева
+        expr.second = std::make_shared<Expr>(parseAndExpression(lexer)); // Правая ветвь дерева
+        left = expr; // Аккумуляция результата для корректной ассоциативности
     }
 
-    return left; // Возврат корня логического поддерева OR
+    return left; // Возврат корневого узла OR-выражения
 }
 
-// Разбор цепочки условий, объединенных оператором AND
+// Разбор цепочки логических И (AND)
 Expr Parser::parseAndExpression(Lexer& lexer) const
 {
-    Expr left = parsePrimaryExpression(lexer); // Разбор базового предиката или выражения в скобках
+    Expr left = parsePrimaryExpression(lexer); // Спуск к базовым выражениям
 
     while (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "AND")
     {
-        lexer.next(); // Извлечение токена "AND" из потока
-        Expr right = parsePrimaryExpression(lexer); // Считывание следующего связанного выражения
-
-        Expr combined; // Создание комбинированного узла дерева
-        combined.kind = Expr::Kind::And; // Установка типа операции И
-        combined.first = std::make_shared<Expr>(left); // Привязка левой части
-        combined.second = std::make_shared<Expr>(right); // Привязка правой части
-        left = combined; // Перенос узла для продолжения левоассоциативной цепочки
+        lexer.next(); // Поглощение "AND"
+        Expr expr;
+        expr.kind = Expr::Kind::And; // Установка типа узла И
+        expr.first = std::make_shared<Expr>(left); // Левая ветвь
+        expr.second = std::make_shared<Expr>(parsePrimaryExpression(lexer)); // Правая ветвь
+        left = expr; // Накопление цепочки AND
     }
 
-    return left; // Возврат корня логического поддерева AND
+    return left; // Возврат корневого узла AND-выражения
 }
 
-// Обработка выражений высшего приоритета (условия в круглых скобках)
+// Разбор первичных элементов выражения: предикаты или выражения в скобках
 Expr Parser::parsePrimaryExpression(Lexer& lexer) const
 {
     if (lexer.consumeIf("("))
     {
-        Expr inside = parseWhereExpression(lexer); // Рекурсивный запуск разбора вложенного выражения
-        lexer.expect(")"); // Проверка наличия обязательной закрывающей скобки
-        return inside; // Возврат изолированного поддерева
+        // Если встречена открывающая скобка — рекурсивный разбор вложенного выражения
+        Expr expr = parseWhereExpression(lexer);
+        lexer.expect(")"); // Обязательное наличие закрывающей скобки
+        return expr;
     }
 
-    return parsePredicate(lexer); // Если скобок нет, парсим стандартный одиночный предикат
+    return parsePredicate(lexer); // Иначе разбор атомарного условия (сравнение, LIKE и т.д.)
 }
 
-// Разбор конкретного предиката сравнения, диапазона BETWEEN или шаблона LIKE
+// Анализ конкретного условия сравнения (предиката)
 Expr Parser::parsePredicate(Lexer& lexer) const
 {
-    Operand left = parseOperand(lexer); // Считывание левой части выражения (переменная/константа)
-
-    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "BETWEEN")
-    {
-        lexer.next(); // Поглощение ключевого слова BETWEEN
-        Expr expr; // Создание выражения диапазона
-        expr.kind = Expr::Kind::Between; // Присвоение типа BETWEEN
-        expr.left = left; // Привязка проверяемого операнда
-        expr.low = parseOperand(lexer); // Парсинг нижней (включаемой) границы интервала
-        lexer.expectWord("AND"); // Обязательный разделитель границ диапазона
-        expr.high = parseOperand(lexer); // Парсинг верхней (исключаемой) границы интервала
-        return expr; // Возврат сформированного условия диапазона
-    }
-
-    if (lexer.peek().type == TokenType::Word && toUpper(lexer.peek().text) == "LIKE")
-    {
-        lexer.next(); // Поглощение ключевого слова LIKE
-        Expr expr; // Создание выражения для работы с регулярными выражениями
-        expr.kind = Expr::Kind::Like; // Присвоение типа LIKE
-        expr.left = left; // Запись проверяемой строки
-        expr.pattern = parseOperand(lexer); // Парсинг шаблона или регулярного выражения
-        return expr; // Возврат условия поиска по регулярному выражению
-    }
-
-    Expr expr; // Создание стандартного бинарного выражения сравнения
-    expr.kind = Expr::Kind::Compare; // Установка типа бинарного сравнения
+    Operand left = parseOperand(lexer); // Извлечение левой части (например, поле)
+    Expr expr;
+    expr.kind = Expr::Kind::Compare; // Режим сравнения
     expr.left = left; // Перенос левого операнда
     expr.compareOp = parseCompareOp(lexer); // Выделение знака сравнения
     expr.right = parseOperand(lexer); // Извлечение правого операнда
@@ -500,6 +471,34 @@ SelectCommand Parser::parseSelect(Lexer& lexer) const
     {
         lexer.next(); // Перешагивание через токен "WHERE"
         command.where = parseWhereExpression(lexer); // Формирование и привязка дерева фильтрации строк
+    }
+
+    return command;
+}
+
+// Разбор команды регистрации пользователя (REGISTER USER ... PASSWORD ... ROLE ...)
+RegisterUserCommand Parser::parseRegister(Lexer& lexer) const
+{
+    RegisterUserCommand command;
+    lexer.expectWord("USER");
+    command.username = parseIdentifier(lexer);
+
+    lexer.expectWord("PASSWORD");
+    Value pwd = parseLiteral(lexer);
+    if (pwd.type != ValueType::String)
+    {
+        throw std::runtime_error("Пароль должен быть строковым литералом");
+    }
+    command.password = *pwd.stringValue;
+
+    if (lexer.consumeIf("ROLE"))
+    {
+        Value role = parseLiteral(lexer);
+        if (role.type != ValueType::String)
+        {
+            throw std::runtime_error("Роль должна быть строковым литералом");
+        }
+        command.role = *role.stringValue;
     }
 
     return command;

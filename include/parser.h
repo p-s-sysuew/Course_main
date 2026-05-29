@@ -28,6 +28,7 @@ private:
     UpdateCommand parseUpdate(Lexer& lexer) const;
     DeleteCommand parseDelete(Lexer& lexer) const;
     SelectCommand parseSelect(Lexer& lexer) const;
+    RegisterUserCommand parseRegister(Lexer& lexer) const;
 
     std::vector<std::string> parseIdentifierList(Lexer& lexer) const;
     std::vector<Value> parseLiteralRow(Lexer& lexer) const;
